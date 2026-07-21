@@ -1,2 +1,51 @@
-# SongIdeaWheel
-Song idea generator
+# The Progression Wheel
+
+A circle-of-fifths songwriting sketchpad. Pick a key, a genre and an emotion — the wheel lights up
+a chord progression, colour-coded by harmonic function, and everything downstream follows: reference
+songs, colour moves, song structures, a playable rhythm section and a melody grid.
+
+**Live app:** open `index.html` directly, or enable GitHub Pages (Settings → Pages → deploy from
+`main`, root) to serve it at `https://sebastiz.github.io/progression-wheel/`.
+
+## Features
+
+- **The wheel** — progressions drawn on the circle of fifths, colour-coded tonic / subdominant /
+  dominant, animated path, tap-to-swap chords, tappable overlays for parallel chords and secondary
+  dominants
+- **Chord colour** — Triads / 7ths / 9ths switch re-voices the whole app by rule
+- **Colour moves** — secondary dominants, parallel swaps, borrowed chords, chromatic mediants and
+  tritone substitutions, each with reference songs that use the move
+- **Song structures** — choose a form and the whole song writes out in shorthand
+  (`V×2 · P×2 · C×2 …`) with a section legend, bar counts, and optional contrast loops
+  (a different progression for the chorus / bridge / verses)
+- **Rhythm section** — ~30 strumming patterns (including 3/4 and 6/8), five instrument voices,
+  synthesized drum kits, swing, and a lookahead-scheduled metronome that plays through the loop or
+  the entire chosen structure
+- **Melody grid** — eighth-note, polyphonic, spanning the whole progression, with per-chord landing
+  notes and a scale/pentatonic reference; melodies persist through every edit and transpose with the
+  key
+- **Tools** — destination finder (shortest chord path between two chords), descending-bass
+  harmonisations, ear training, dice, MIDI export, persistent sketches
+- **Fingerings** — tap any chord for guitar chord boxes (open + barre shapes) and highlighted piano
+  keys
+
+## Development
+
+`src/progression-wheel.jsx` is the source of truth — a single-file React component.
+`index.html` is the pre-compiled build (React from CDN + minified app); this is what gets deployed.
+
+```bash
+npm install
+npm run build   # rebuilds index.html from src/
+```
+
+## Notes
+
+- Audio is synthesized with the Web Audio API; on iPhone the ring/silent switch mutes web audio.
+- Sketches persist via `window.storage` when hosted inside Claude artifacts; on the plain web build
+  they are session-only. Swapping in `localStorage` for the GitHub Pages build is a small change in
+  `saveSketch` / `loadSketches` if wanted.
+
+## License
+
+MIT
