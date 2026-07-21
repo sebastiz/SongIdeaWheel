@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.9
+- Live section highlight: the currently playing pass lights up in the song list (accent border,
+  play marker), and the playback readout names it (V2 verse - bar 3 of 40).
+- Tap any pass (its title or the play button) to start playback from that point in the song.
+
+## 3.8
+- Installable PWA: web manifest, app icons, offline service worker (caches the app and React), and
+  localStorage sketch persistence on the web build. Add to Home Screen on iPhone gives a
+  full-screen, offline-capable app whose sketches survive restarts.
+
 ## 3.7
 - Song write-out grouping: adjacent passes of the same section type sit inside a colour-coded
   bounding box with a group label (VERSES x2, CHORUS ...); section badges take the same colour.

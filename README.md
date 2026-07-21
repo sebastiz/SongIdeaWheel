@@ -52,9 +52,9 @@ npm run build   # rebuilds index.html from src/
 ## Notes
 
 - Audio is synthesized with the Web Audio API; on iPhone the ring/silent switch mutes web audio.
-- Sketches persist via `window.storage` when hosted inside Claude artifacts; on the plain web build
-  they are session-only. Swapping in `localStorage` for the GitHub Pages build is a small change in
-  `saveSketch` / `loadSketches` if wanted.
+- The app is an installable PWA: on iPhone, open the site in Safari and Add to Home Screen for a
+  full-screen, offline-capable app. Sketches persist via localStorage on the web (window.storage
+  inside Claude artifacts).
 
 ## License
 

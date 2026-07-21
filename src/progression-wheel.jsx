@@ -452,6 +452,9 @@ const FN_TEXT = { T:"#171E28", S:"#0D1A16", D:"#2A0F0B" };
 const GOLD = "#E5B554", LAV = "#A493EE", PATH = "#F2EDE0";
 const POS_MAJ = [0,7,2,9,4,11,6,1,8,3,10,5];
 
+// section-type accent colours for the song write-out grouping
+const SEC_COL = { V:"#54B79D", C:"#E0B85A", B:"#B7A6E0", P:"#7FB4D8", I:"#8B94A3", O:"#8B94A3", L:"#8B94A3" };
+
 /* ===== midi export ===== */
 const vlq = n => { const b = [n & 0x7f]; while ((n >>= 7)) b.unshift((n & 0x7f) | 0x80); return b; };
 function midiBytes(bpm, beatsPerBar, bars, drumPat) {
@@ -493,52 +496,6 @@ const BORROWED = {
 const MEDIANTS = { major: [["III",4,"maj",1],["VI",9,"maj",1],["bVI",8,"maj",1],["bIII",3,"maj",1]],
   minor: [["V of bIII",10,"maj",1]] };
 
-// shortest path between two triads via fifths / relatives / parallels / mediants
-function findPath(fromR, fromQ, toR, toQ) {
-  const key = (r, q) => r + q;
-  const nbrs = ({ r, q }) => {
-    const out = [{ r:(r+7)%12, q }, { r:(r+5)%12, q }, { r, q: q === "maj" ? "min" : "maj" }];
-    if (q === "maj") out.push({ r:(r+9)%12, q:"min" }, { r:(r+5)%12, q:"min" }, { r:(r+4)%12, q:"maj" }, { r:(r+8)%12, q:"maj" });
-    else out.push({ r:(r+3)%12, q:"maj" });
-    return out;
-  };
-  const start = { r: fromR, q: fromQ }, seen = { [key(fromR, fromQ)]: null };
-  let frontier = [start];
-  for (let d = 0; d < 4; d++) {
-    const next = [];
-    for (const n of frontier) for (const m of nbrs(n)) {
-      const k = key(m.r, m.q);
-      if (k in seen) continue;
-      seen[k] = n;
-      if (m.r === toR && m.q === toQ) {
-        const path = [m];
-        let cur = n;
-        while (cur) { path.unshift(cur); cur = seen[key(cur.r, cur.q)]; }
-        return path.map(x => chordName(x.r, x.q));
-      }
-      next.push(m);
-    }
-    frontier = next;
-  }
-  return null;
-}
-
-// descending-bass line clichés, computed per key
-const clichés = (t, mode) => mode === "minor"
-  ? [{ name:"The minor line cliché (1–7–♭7–6)",
-      line:`${SEMI_NAME[t]}m — ${SEMI_NAME[t]}m(maj7) — ${SEMI_NAME[t]}m7 — ${SEMI_NAME[(t+2)%12]}m7♭5 (or ${SEMI_NAME[(t+5)%12]})`,
-      songs:"Stairway to Heaven (intro) · Something (verse) · Michelle · My Funny Valentine" }]
-  : [{ name:"The descending major bass (8–7–6–5–4)",
-      line:`${SEMI_NAME[t]} — ${SEMI_NAME[(t+7)%12]}/${SEMI_NAME[(t+11)%12]} — ${SEMI_NAME[(t+9)%12]}m — ${SEMI_NAME[t]}/${SEMI_NAME[(t+7)%12]} — ${SEMI_NAME[(t+5)%12]}`,
-      songs:"A Whiter Shade of Pale · Piano Man · Let It Be (verse tail) · Dear Prudence" },
-    { name:"The pop drop (1–7–6)",
-      line:`${SEMI_NAME[t]} — ${SEMI_NAME[(t+4)%12]}m/${SEMI_NAME[(t+11)%12]} — ${SEMI_NAME[(t+9)%12]}m`,
-      songs:"Everybody Wants to Rule the World · Mr. Brightside (verse feel)" }];
-
-// ear-training question bank: [numerals, mode]
-const EAR_QS = [["I IV V I","major"],["I V vi IV","major"],["I vi IV V","major"],["ii V I I","major"],
-  ["I bVII IV I","major"],["i bVI bIII bVII","minor"],["i bVII bVI V","minor"],["I IV I V","major"]];
-
 /* ===== app ===== */
 export default function ProgressionWheel() {
   const [tonic, setTonic] = useState(0);
@@ -562,14 +519,15 @@ export default function ProgressionWheel() {
   const [drum, setDrum] = useState("off");
   const [colour, setColour] = useState("triads");           // triads | sevenths
   const [force, setForce] = useState(null);                 // dice override of the progression
-  const [dest, setDest] = useState("");                     // destination-finder target
   const [sketches, setSketches] = useState(null);           // null = not loaded yet
   const [sketchName, setSketchName] = useState("");
-  const [ear, setEar] = useState(null);                     // ear-training question
   const [ioNote, setIoNote] = useState(null);               // save/export feedback
   const [contrast, setContrast] = useState({ id:"", sec:"C" }); // second loop for a section
-  const [melo, setMelo] = useState({ progId:"", ids:[], bars:[], div:0 }); // melody, keyed to chord identities
-  const [curQ, setCurQ] = useState(-1);
+  const [melos, setMelos] = useState({ progId:"", secs:{} }); // per-section melodies, chord-anchored
+  const [openSecs, setOpenSecs] = useState({});             // which section melody grids are open
+  const [showLand, setShowLand] = useState(false);          // landing-notes collapse
+  const [curQ, setCurQ] = useState(null);                   // {sym, col} playhead in melody grids
+  const [curInst, setCurInst] = useState(null);             // instance key currently playing
   const metroRef = useRef(null);
   const bpmRef = useRef(0), patRef = useRef([]), swingRef = useRef(false);
   const chordsRef = useRef({ list:[], seq:[] }), instrRef = useRef("guitar"), drumRef = useRef(null);
@@ -739,9 +697,9 @@ export default function ProgressionWheel() {
     const p2 = PROGRESSIONS[contrast.id];
     const nd2 = p2.mode === "minor" ? MINOR_NUM : MAJOR_NUM;
     const fn2 = p2.mode === "minor" ? FUNC_MINOR : FUNC_MAJOR;
-    return p2.numerals.map(n => {
+    return p2.numerals.map((n, bi) => {
       const [off, q0] = nd2[n], r = (tonic + off) % 12, q = seventh(q0, n);
-      return { numeral:n, root:r, quality:q, name:chordName(r, q), func:fn2[n] || "T" };
+      return { numeral:n, root:r, quality:q, name:chordName(r, q), bi, c2:true, func:fn2[n] || "T" };
     });
   }, [contrast.id, tonic, colour]);
 
@@ -753,23 +711,39 @@ export default function ProgressionWheel() {
     if (nums === "HOLD1") return [pool[0]];
     return nums.map(n => {
       const [off, q0] = numDefs[n], r = (tonic + off) % 12, q = seventh(q0, n);
-      return { root: r, quality: q, name: chordName(r, q) };
+      return { root: r, quality: q, name: chordName(r, q), numeral: n };
     });
   };
   const poolFor = sym => (chords2 && contrast.sec === sym) ? chords2 : chords;
   const resolveNums = nums => resolveWith(nums, chords);
   const padEven = a => a.length % 2 ? [...a, a[a.length - 1]] : a;
 
-  const structBars = useMemo(() => {
-    if (!structSel) return null;
-    const bars = [];
-    structSel.plan.forEach(row => {
-      const sym = letterFor(row.sec), word = LETTER_WORD[sym] || row.sec.toLowerCase();
-      const cs = padEven(resolveWith(row.nums, poolFor(sym)));
-      for (let r = 0; r < row.reps; r++) cs.forEach(c => bars.push({ chord: c, sym, word }));
+  // sections: the song in performance order, one INSTANCE per pass of each section
+  // (Verse ×4 → V1 V2 V3 V4, each with its own melody), plus the flat bar list for playback
+  const sections = useMemo(() => {
+    const plan = structSel ? structSel.plan
+      : [{ sec: "Loop", nums: "LOOP", reps: 1, note: null }];
+    const insts = [], counts = {};
+    let totalBars = 0;
+    const bars = structSel ? [] : null;
+    plan.forEach(row => {
+      const L = letterFor(row.sec);
+      const usedC = structSel && chords2 && contrast.sec === L;
+      const cs = padEven(resolveWith(row.nums, structSel ? poolFor(L) : chords));
+      const str = cs.map(c => c.name).join(cs.length > 6 ? "  |  " : " – ");
+      const word = LETTER_WORD[L] || row.sec.toLowerCase();
+      for (let r = 0; r < row.reps; r++) {
+        counts[L] = (counts[L] || 0) + 1;
+        const key = L + counts[L];
+        insts.push({ key, base: L, word, cs, str, usedC, note: r === 0 ? row.note : null,
+          nbars: cs.length, startBar: totalBars });
+        totalBars += cs.length;
+        if (bars) cs.forEach((c, mb) => bars.push({ chord: c, inst: key, word, mb }));
+      }
     });
-    return bars;
-  }, [structSel, chords, chords2, contrast.sec, tonic, progId]);
+    return { insts, totalBars, bars };
+  }, [structSel, chords, chords2, contrast.sec, tonic, progId, colour]);
+  const structBars = sections.bars;
 
   /* ---- melody scale + targets ---- */
   const scaleSemis = prog.mode === "minor" ? [0,2,3,5,7,8,10] : [0,2,4,5,7,9,11];
@@ -783,31 +757,47 @@ export default function ProgressionWheel() {
   bpmRef.current = effBpm; patRef.current = rhythm.pattern; swingRef.current = !!rhythm.swing;
   instrRef.current = instr; drumRef.current = DRUMS[drum].pattern;
   const meloBeats = rhythm.pattern.length;                  // eighths per bar (6 in waltz time)
-  const curIds = chords.map(c => c.inserted ? c.baseName : "b" + c.bi);
-  // adapt the saved melody to the CURRENT chord sequence. Bars follow their chords through
-  // inserts, removals, swaps, key changes and colour changes; on a different progression
-  // they carry over positionally (bar 1 stays bar 1). Nothing is ever silently wiped.
-  const meloBars = useMemo(() => {
+  // key-independent chord identity, per pool: base slot / contrast slot / numeral position / insert tag
+  const chordId = (c, i) => c.inserted ? c.baseName
+    : c.c2 ? "c" + c.bi
+    : c.bi != null ? "b" + c.bi
+    : "x" + i + ":" + (c.numeral || "");
+  // adapt one section's saved melody to its current chords: id-matched within the same
+  // progression (bars follow their chords through edits and key changes), positional otherwise
+  const adaptSec = (saved, ids, samePid) => {
     let p = 0;
-    const samePid = melo.progId === progId;
-    return curIds.map((id, bi) => {
+    return ids.map((id, bi) => {
       let bar = null;
-      if (samePid) {
-        const idx = melo.ids.indexOf(id, p);
-        if (idx >= 0) { bar = melo.bars[idx]; p = idx + 1; }
-      } else if (melo.bars.length) bar = melo.bars[bi] || null;
+      if (saved && samePid) {
+        const idx = saved.ids.indexOf(id, p);
+        if (idx >= 0) { bar = saved.bars[idx]; p = idx + 1; }
+      } else if (saved && saved.bars.length) bar = saved.bars[bi] || null;
       return Array.from({ length: meloBeats }, (_, c) => (bar && bar[c] ? [...bar[c]] : []));
     });
-  }, [melo, progId, curIds.join("|"), meloBeats]);
-  const meloGrid = meloBars.flat();
-  const meloCols = meloGrid.length;
-  meloRef.current = { cols: meloGrid, scale: scaleSemis, tonic };
-  const tapMelo = (c, deg) => {
-    const bars = meloBars.map(bar => bar.map(a => [...a]));
+  };
+  const secMelos = useMemo(() => {
+    const samePid = melos.progId === progId;
+    const out = {};
+    sections.insts.forEach(d => {
+      const ids = d.cs.map(chordId);
+      const bars = adaptSec(melos.secs[d.key], ids, samePid);
+      out[d.key] = { ids, bars, flat: bars.flat() };
+    });
+    return out;
+  }, [melos, progId, sections, meloBeats]);
+  const copyMelody = (fromKey, toKey) => {
+    const from = melos.progId === progId ? melos.secs[fromKey] : null;
+    if (!from) return;
+    setMelos({ progId, secs: { ...melos.secs, [toKey]: { ids: [...from.ids], bars: from.bars.map(b => b.map(a => [...a])) } } });
+  };
+  meloRef.current = { bySym: secMelos, scale: scaleSemis, tonic };
+  const tapMelo = (sym, c, deg) => {
+    const sec = secMelos[sym];
+    const bars = sec.bars.map(bar => bar.map(a => [...a]));
     const cell = bars[Math.floor(c / meloBeats)][c % meloBeats];
     const at = cell.indexOf(deg);
     if (at >= 0) cell.splice(at, 1); else cell.push(deg);
-    setMelo({ progId, ids: curIds, bars, div: meloBeats });
+    setMelos({ progId, secs: { ...(melos.progId === progId ? melos.secs : {}), [sym]: { ids: sec.ids, bars } } });
   };
   {
     const idx = chords.map((_, i) => i);
@@ -818,29 +808,31 @@ export default function ProgressionWheel() {
   const stopMetro = () => {
     const m = metroRef.current;
     if (m) { clearInterval(m.timer); try { m.ctx.close(); } catch (e) {} metroRef.current = null; }
-    setPlaying(false); setCurStep(-1); setCurBar(-1); setCurLabel(null); setCurQ(-1);
+    setPlaying(false); setCurStep(-1); setCurBar(-1); setCurLabel(null); setCurQ(null); setCurInst(null);
   };
-  const startMetro = () => {
+  const startMetro = fromBar => {
     stopMetro();
+    const from = Number.isFinite(fromBar) ? fromBar : 0;
     const AC = window.AudioContext || window.webkitAudioContext;
     const ctx = new AC();
     if (ctx.state === "suspended") ctx.resume();   // unlock inside the tap (iOS)
     const un = ctx.createOscillator(), ug = ctx.createGain();
     ug.gain.value = 0.0001; un.connect(ug).connect(ctx.destination);
     un.start(); un.stop(ctx.currentTime + 0.02);
-    const m = { ctx, step: 0, nextTime: ctx.currentTime + 0.1, noise: makeNoise(ctx) };
+    const m = { ctx, step: from * (patRef.current.length || 8), nextTime: ctx.currentTime + 0.1, noise: makeNoise(ctx) };
     m.timer = setInterval(() => {
       if (m.ctx.state === "suspended") m.ctx.resume();
       const eighth = 60 / bpmRef.current / 2;
       while (m.nextTime < m.ctx.currentTime + 0.1) {
         const L = patRef.current.length || 8, i = m.step % L;
         const { list, seq, struct } = chordsRef.current;
-        let chord, pillIdx = -1, label = null;
+        let chord, pillIdx = -1, label = null, instNow = "L1";
         if (struct && struct.length) {
           const bar = Math.floor(m.step / L) % struct.length, e = struct[bar];
           chord = e.chord;
           pillIdx = list.findIndex(c => c.name === e.chord.name);
-          label = `${e.word} · bar ${bar + 1} of ${struct.length}`;
+          label = `${e.inst} ${e.word} · bar ${bar + 1} of ${struct.length}`;
+          instNow = e.inst;
         } else {
           const bar = seq.length ? Math.floor(m.step / L) % seq.length : 0;
           pillIdx = seq.length ? seq[bar] : 0;
@@ -856,16 +848,28 @@ export default function ProgressionWheel() {
         const dpat = drumRef.current;
         if (dpat && dpat[i]) for (const ch of dpat[i]) drumSound(m.ctx, t, ch, m.noise);
         const mel = meloRef.current;
-        if (mel && mel.cols.length) {
-          const col = m.step % mel.cols.length;
-          const base = (mel.tonic > 6 ? 60 : 72) + mel.tonic;
-          (mel.cols[col] || []).forEach(deg => leadNote(m.ctx, t, base + mel.scale[deg], eighth * 0.92));
-          const cc = col;
-          setTimeout(() => setCurQ(cc), Math.max(0, (t - m.ctx.currentTime) * 1000));
+        if (mel) {
+          let sym = null, mb = 0;
+          if (struct && struct.length) {
+            const e = struct[Math.floor(m.step / L) % struct.length];
+            sym = e.inst; mb = e.mb;
+          } else if (mel.bySym.L1) {
+            sym = "L1";
+            const nb = mel.bySym.L1.bars.length || 1;
+            mb = Math.floor(m.step / L) % nb;
+          }
+          const sec = sym && mel.bySym[sym];
+          if (sec && sec.flat.length) {
+            const col = (mb * L + i) % sec.flat.length;
+            const base = (mel.tonic > 6 ? 60 : 72) + mel.tonic;
+            (sec.flat[col] || []).forEach(deg => leadNote(m.ctx, t, base + mel.scale[deg], eighth * 0.92));
+            const q = { sym, col };
+            setTimeout(() => setCurQ(q), Math.max(0, (t - m.ctx.currentTime) * 1000));
+          }
         }
         const delay = Math.max(0, (t - m.ctx.currentTime) * 1000);
         setTimeout(() => setCurStep(i), delay);
-        if (i === 0) setTimeout(() => { setCurBar(pillIdx); setCurLabel(label); }, delay);
+        if (i === 0) setTimeout(() => { setCurBar(pillIdx); setCurLabel(label); setCurInst(instNow); }, delay);
         m.step++; m.nextTime += eighth;
       }
     }, 20);
@@ -908,10 +912,13 @@ export default function ProgressionWheel() {
 
   /* ---- sketches (persistent, via window.storage) ---- */
   const hasStore = typeof window !== "undefined" && window.storage;
+  const hasLocal = typeof window !== "undefined" && (() => { try { return !!window.localStorage; } catch (e) { return false; } })();
   const loadSketches = async () => {
-    if (!hasStore) { setSketches([]); return; }
-    try { const r = await window.storage.get("pw-sketches"); setSketches(r ? JSON.parse(r.value) : []); }
-    catch (e) { setSketches([]); }
+    try {
+      if (hasStore) { const r = await window.storage.get("pw-sketches"); setSketches(r ? JSON.parse(r.value) : []); return; }
+      if (hasLocal) { const r = window.localStorage.getItem("pw-sketches"); setSketches(r ? JSON.parse(r) : []); return; }
+    } catch (e) {}
+    setSketches([]);
   };
   useEffect(() => { loadSketches(); }, []);   // eslint-disable-line
   const saveSketch = async () => {
@@ -920,9 +927,11 @@ export default function ProgressionWheel() {
       bpm: effBpm, selStruct, contrast, edits: ovMap, inserts: insList };
     const list = [...(sketches || []).filter(x => x.name !== name), s];
     setSketches(list); setSketchName("");
-    if (hasStore) { try { await window.storage.set("pw-sketches", JSON.stringify(list)); setIoNote("Saved “" + name + "”."); }
-      catch (e) { setIoNote("Saved for this session only — storage unavailable."); } }
-    else setIoNote("Saved for this session only — storage unavailable.");
+    try {
+      if (hasStore) await window.storage.set("pw-sketches", JSON.stringify(list));
+      else if (hasLocal) window.localStorage.setItem("pw-sketches", JSON.stringify(list));
+      setIoNote((hasStore || hasLocal) ? "Saved “" + name + "”." : "Saved for this session only.");
+    } catch (e) { setIoNote("Saved for this session only."); }
   };
   const loadSketch = s => {
     setForce(s.progId); setTonic(s.tonic); setGenre(s.genre); setEmotion(s.emotion);
@@ -932,31 +941,6 @@ export default function ProgressionWheel() {
     const eKey = s.progId + ":" + s.tonic;
     setEdits({ key:eKey, map:s.edits || {} }); setInserts({ key:eKey, list:s.inserts || [] });
     setIoNote("Loaded “" + s.name + "”.");
-  };
-
-  /* ---- ear training ---- */
-  const playOnce = list => {
-    const AC = window.AudioContext || window.webkitAudioContext;
-    const ctx = new AC();
-    if (ctx.state === "suspended") ctx.resume();
-    list.forEach((c, i) => playHit(ctx, ctx.currentTime + 0.15 + i * 0.9, c, ">", "piano", 0.45));
-  };
-  const earChords = q => {
-    const nd = q.mode === "minor" ? MINOR_NUM : MAJOR_NUM;
-    return q.nums.split(" ").map(n => {
-      const [off, qq] = nd[n]; return { root:(q.key + off) % 12, quality:qq };
-    });
-  };
-  const newEarQ = () => {
-    const [nums, mode] = EAR_QS[Math.floor(Math.random() * EAR_QS.length)];
-    const key = Math.floor(Math.random() * 12);
-    const opts = [nums];
-    while (opts.length < 3) {
-      const [n2, m2] = EAR_QS[Math.floor(Math.random() * EAR_QS.length)];
-      if (m2 === mode && !opts.includes(n2)) opts.push(n2);
-    }
-    const q = { nums, mode, key, opts: opts.sort(() => Math.random() - 0.5), picked:null };
-    setEar(q); playOnce(earChords(q));
   };
 
   /* ---- svg pieces ---- */
@@ -1066,6 +1050,11 @@ export default function ProgressionWheel() {
         .mcell.b0 { border-left:2px solid #3A4656; }
         .mcell.bt { border-left:1px solid #2A3442; }
         .mscroll { overflow-x:auto; padding-bottom:4px; }
+        .sgrp { border:1.5px solid #2A3442; border-radius:13px; padding:2px 11px 9px; margin-top:11px; }
+        .sgrp .arr:first-of-type { border-top:none; padding-top:2px; }
+        .arr.playnow { background:#161F2C; border-radius:10px; padding:9px 10px 10px; border-top-color:transparent; margin-top:6px; }
+        .arr.playnow + .arr { border-top-color:transparent; }
+        .sgrplbl { font-size:10px; font-weight:700; letter-spacing:.13em; text-transform:uppercase; margin-top:7px; }
         .mbar { font-size:11px; font-weight:700; border-radius:6px; text-align:center; padding:2px 0; margin:0 1px 2px; white-space:nowrap; overflow:hidden; }
         .sug { border-top:1px solid #232C3A; padding:10px 2px 8px; margin-top:8px; }
         .sugname { font-size:14px; font-weight:600; line-height:1.35; }
@@ -1073,52 +1062,45 @@ export default function ProgressionWheel() {
       `}</style>
 
       <div className="wrap">
-        <div className="eyebrow">Songwriting sketchpad · v3.4</div>
+        <div className="eyebrow">Songwriting sketchpad · v3.9</div>
         <h1>The Progression Wheel</h1>
         <p className="sub">Pick a key, a genre and a feeling — the wheel does the rest.</p>
 
         {/* controls */}
         <div className="panel">
-          <div className="selrow">
-            <label className="selwrap" style={{ flex:"0 0 74px" }}>
+          <div className="row" style={{ gap:"8px 12px", alignItems:"flex-end" }}>
+            <label className="selwrap" style={{ flex:"0 0 66px" }}>
               <span className="lbl" style={{ margin:0 }}>Key</span>
               <select value={tonic} onChange={e => setTonic(+e.target.value)}>
                 {Object.entries(SEMI_NAME).map(([s, n]) => <option key={s} value={s}>{n}</option>)}
               </select>
             </label>
-            <label className="selwrap">
+            <label className="selwrap" style={{ flex:"1 1 96px" }}>
               <span className="lbl" style={{ margin:0 }}>Genre</span>
               <select value={genre || ""} onChange={e => { setGenre(e.target.value || null); setForce(null); }}>
                 <option value="">Any</option>
                 {CATEGORIES[0].items.map(it => <option key={it.name} value={it.name}>{it.name}</option>)}
               </select>
             </label>
-            <label className="selwrap">
+            <label className="selwrap" style={{ flex:"1 1 96px" }}>
               <span className="lbl" style={{ margin:0 }}>Emotion</span>
               <select value={emotion || ""} onChange={e => { setEmotion(e.target.value || null); setForce(null); }}>
                 <option value="">Any</option>
                 {CATEGORIES[1].items.map(it => <option key={it.name} value={it.name}>{it.name}</option>)}
               </select>
             </label>
-          </div>
-
-          <div className="row" style={{ marginTop:12, gap:16, justifyContent:"space-between" }}>
-            <div className="row" style={{ gap:16 }}>
-              <div className={"tog lav" + (showPar ? " on" : "")} onClick={() => setShowPar(v => !v)}>
-                <div className="sw" /> Parallel
-              </div>
-              <div className={"tog gold" + (showSec ? " on" : "")} onClick={() => setShowSec(v => !v)}>
-                <div className="sw" /> Sec. dominants
-              </div>
+            <div className={"tog lav" + (showPar ? " on" : "")} onClick={() => setShowPar(v => !v)} style={{ paddingBottom:6 }}>
+              <div className="sw" /> Par
             </div>
-            <div className="row" style={{ gap:8 }}>
-              <div className="seg">
-                <button className={colour === "triads" ? "on" : ""} onClick={() => setColour("triads")}>Triads</button>
-                <button className={colour === "sevenths" ? "on" : ""} onClick={() => setColour("sevenths")}>7ths</button>
-                <button className={colour === "extended" ? "on" : ""} onClick={() => setColour("extended")}>9ths</button>
-              </div>
-              <button className="btn" style={{ padding:"5px 11px" }} onClick={rollDice} title="Surprise me">🎲</button>
+            <div className={"tog gold" + (showSec ? " on" : "")} onClick={() => setShowSec(v => !v)} style={{ paddingBottom:6 }}>
+              <div className="sw" /> Sec
             </div>
+            <div className="seg" style={{ marginBottom:2 }}>
+              <button className={colour === "triads" ? "on" : ""} onClick={() => setColour("triads")}>Triads</button>
+              <button className={colour === "sevenths" ? "on" : ""} onClick={() => setColour("sevenths")}>7ths</button>
+              <button className={colour === "extended" ? "on" : ""} onClick={() => setColour("extended")}>9ths</button>
+            </div>
+            <button className="btn" style={{ padding:"5px 11px", marginBottom:2 }} onClick={rollDice} title="Surprise me">🎲</button>
           </div>
 
           <div className="selrow" style={{ marginTop:12 }}>
@@ -1312,7 +1294,7 @@ export default function ProgressionWheel() {
               <button className="mini" onClick={() => nudgeBpm(-5)}>−5</button>
               <span className="bpmval">{effBpm} bpm</span>
               <button className="mini" onClick={() => nudgeBpm(5)}>+5</button>
-              <button className="btn" style={{ padding:"5px 13px" }} onClick={playing ? stopMetro : startMetro}>
+              <button className="btn" style={{ padding:"5px 13px" }} onClick={() => (playing ? stopMetro() : startMetro(0))}>
                 {playing ? "■ Stop" : "▶ Play"}
               </button>
               <button className="btn" style={{ padding:"5px 11px" }} onClick={exportMidi} title="Export MIDI">↓ MIDI</button>
@@ -1364,154 +1346,18 @@ export default function ProgressionWheel() {
             ))}
           </div>
           <p className="keytag" style={{ marginTop:8 }}>
-            Plays through the chosen song structure if one is selected below — otherwise loops the progression,
-            one chord per bar. No sound? Check the phone's silent switch and volume.
+            Plays through the chosen song structure if one is selected below — each section with its own
+            melody — otherwise loops the progression, one chord per bar. No sound? Check the phone's
+            silent switch and volume.
           </p>
         </div>
 
-        {/* melody notes */}
-        <div className="panel">
-          <div className="progtitle" style={{ fontSize:17 }}>Melody notes</div>
-          <div className="lbl" style={{ marginTop:6 }}>The scale — {keyLabel}</div>
-          <div className="row" style={{ gap:6 }}>
-            {scaleSemis.map((s, i) => (
-              <span key={i} className={"npill" + (pentSemis.includes(s) ? " npent" : "")}>{SEMI_NAME[(tonic + s) % 12]}</span>
-            ))}
-          </div>
-          <p className="keytag" style={{ margin:"6px 0 0" }}>
-            Filled notes are the {prog.mode === "minor" ? "minor" : "major"} pentatonic — safe over every diatonic bar.
-          </p>
-
-          <div className="lbl" style={{ marginTop:12 }}>Landing notes per chord</div>
-          {uniques.map((c, i) => {
-            const tones = chordIvs(c.quality).map(x => (c.root + x) % 12);
-            const chrom = tones.some(t => !scaleNotes.includes(t));
-            const live = playing && curBar >= 0 && chords[curBar] && chords[curBar].name === c.name;
-            return (
-              <div key={i} className={"mrow" + (live ? " mrowon" : "")}>
-                <span className="pill" style={{ background: FN_COLOR[c.func], color: FN_TEXT[c.func] }}>{c.name}</span>
-                {tones.map((t, j) => <span key={j} className={"npill nsm" + (!scaleNotes.includes(t) ? " nchrom" : "")}>{SEMI_NAME[t]}</span>)}
-                {chrom && <span className="keytag" style={{ color:GOLD }}>chromatic</span>}
-              </div>
-            );
-          })}
-          <div className="lbl" style={{ marginTop:14 }}>Sketch a melody
-            {meloGrid.some(a => a.length) &&
-              <button className="mini" onClick={() => setMelo({ progId:"", ids:[], bars:[], div:0 })}>Clear</button>}
-          </div>
-          <div className="mscroll">
-            <div className="mline" style={{ gridTemplateColumns:`36px repeat(${meloCols}, minmax(15px,1fr))` }}>
-              <span />
-              {chords.map((c, b) => (
-                <span key={b} className="mbar" style={{ gridColumn:`span ${meloBeats}`,
-                  background: FN_COLOR[c.func], color: FN_TEXT[c.func] }}>{c.name}</span>
-              ))}
-            </div>
-            {[...scaleSemis.keys()].reverse().map(deg => (
-              <div key={deg} className="mline" style={{ gridTemplateColumns:`36px repeat(${meloCols}, minmax(15px,1fr))` }}>
-                <span className="mnote">{SEMI_NAME[(tonic + scaleSemis[deg]) % 12]}</span>
-                {Array.from({ length: meloCols }, (_, c) => (
-                  <div key={c} onClick={() => tapMelo(c, deg)}
-                    className={"mcell" + (meloGrid[c].includes(deg) ? " on" : "")
-                      + (playing && curQ === c ? " colnow" : "")
-                      + (c % meloBeats === 0 && c > 0 ? " b0" : c % 2 === 0 && c > 0 ? " bt" : "")} />
-                ))}
-              </div>
-            ))}
-          </div>
-          <p className="keytag" style={{ marginTop:6 }}>
-            One column per eighth note, grouped by bar under each chord — enough resolution for real
-            phrases and syncopation. Heavier lines mark bars, lighter lines mark beats. Stack cells in the
-            same column for harmonies. Scroll sideways on longer progressions.
-          </p>
-
-          <p className="keytag" style={{ marginTop:10 }}>
-            Passing notes can come from anywhere in the scale above — but land your long notes, downbeats and
-            phrase endings on a note from whichever chord is playing. Root = fully resolved, 3rd = the sweet
-            spot, 5th = stable but plain, ♭7 = wants to fall onward. Gold notes sit outside the key: strong
-            landings during that chord's bar only.
-            {prog.mode === "minor" && " (The raised note over V is the harmonic-minor move — the classic minor-key leading tone.)"}
-          </p>
-        </div>
-
-        {/* finders */}
-        <div className="panel">
-          <div className="progtitle" style={{ fontSize:17 }}>Chord finders</div>
-
-          <div className="lbl" style={{ marginTop:6 }}>Destination finder</div>
-          <div className="row" style={{ gap:8 }}>
-            <span className="keytag">Get from <b style={{ color:"#EDE7DA" }}>{SEMI_NAME[tonic]}{prog.mode === "minor" ? "m" : ""}</b> to</span>
-            <select value={dest} onChange={e => setDest(e.target.value)}>
-              <option value="">choose a chord…</option>
-              {Array.from({ length:12 }, (_, r) => [
-                <option key={"M"+r} value={r + "maj"}>{SEMI_NAME[r]}</option>,
-                <option key={"m"+r} value={r + "min"}>{SEMI_NAME[r]}m</option>,
-              ])}
-            </select>
-          </div>
-          {dest && (() => {
-            const toR = parseInt(dest), toQ = dest.replace(/^\d+/, "");
-            const fromQ = prog.mode === "minor" ? "min" : "maj";
-            if (toR === tonic && toQ === fromQ) return <p className="keytag" style={{ marginTop:6 }}>You're already home.</p>;
-            const path = findPath(tonic, fromQ, toR, toQ);
-            return <div className="arr" style={{ borderTop:"none", paddingTop:6 }}>
-              <div className="arrch">{path ? path.join(" → ") : "no short path found"}</div>
-              <div className="arrnote">via fifths, relatives, parallels and mediant jumps — tap these onto the wheel to build the bridge of your song</div>
-            </div>;
-          })()}
-
-          <div className="lbl" style={{ marginTop:14 }}>Descending-bass harmonisations</div>
-          {clichés(tonic, prog.mode).map((c, i) => (
-            <div key={i} className="arr" style={i === 0 ? { borderTop:"none", paddingTop:4 } : null}>
-              <div className="arrsec">{c.name}</div>
-              <div className="arrch" style={{ fontSize:15.5 }}>{c.line}</div>
-              <div className="sugsongs">{c.songs}</div>
-            </div>
-          ))}
-          <p className="keytag" style={{ marginTop:6 }}>
-            Slash chords ({SEMI_NAME[(tonic+7)%12]}/{SEMI_NAME[(tonic+11)%12]} = that chord over that bass note) — the chords barely move; the bass walks down through them.
-          </p>
-        </div>
-
-        {/* ear training */}
+        {/* song & melody */}
         <div className="panel">
           <div className="row" style={{ justifyContent:"space-between", alignItems:"center" }}>
-            <div className="progtitle" style={{ fontSize:17 }}>Ear training</div>
-            <div className="row" style={{ gap:7 }}>
-              {ear && <button className="mini" onClick={() => playOnce(earChords(ear))}>↻ Replay</button>}
-              <button className="btn" style={{ padding:"5px 13px" }} onClick={newEarQ}>▶ New question</button>
-            </div>
-          </div>
-          {!ear && <p className="keytag" style={{ marginTop:8 }}>
-            Hear four chords, name the numerals — the aural side of everything above.</p>}
-          {ear && (
-            <div style={{ marginTop:10 }}>
-              <div className="row" style={{ gap:8 }}>
-                {ear.opts.map((o, i) => (
-                  <button key={i} onClick={() => setEar({ ...ear, picked:o })}
-                    className="btn" style={{
-                      borderColor: ear.picked == null ? "#4A5668" : o === ear.nums ? "#54B79D" : o === ear.picked ? "#E06A55" : "#2A3442",
-                      color: ear.picked != null && o === ear.nums ? "#54B79D" : "#EDE7DA" }}>
-                    {o.replace(/ /g, " – ")}
-                  </button>
-                ))}
-              </div>
-              {ear.picked != null && (
-                <p className="keytag" style={{ marginTop:8 }}>
-                  {ear.picked === ear.nums ? "Right — " : "Not quite — it was " + ear.nums.replace(/ /g, "–") + ". "}
-                  That was {ear.nums.replace(/ /g, "–")} in {SEMI_NAME[ear.key]} {ear.mode}.
-                </p>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* structures */}
-        <div className="panel">
-          <div className="row" style={{ justifyContent:"space-between", alignItems:"center" }}>
-            <div className="progtitle" style={{ fontSize:17 }}>Song structure</div>
+            <div className="progtitle" style={{ fontSize:17 }}>Song & melody</div>
             <select value={selStruct.startsWith(progId + ":") ? selStruct : ""} onChange={e => setSelStruct(e.target.value)}>
-              <option value="">Choose a structure…</option>
+              <option value="">No structure — just the loop</option>
               {(STRUCTURES[progId] || []).map((st, i) => <option key={"p"+i} value={progId + ":p:" + i}>{st.name}</option>)}
               {UNIVERSAL.map((st, i) => <option key={"u"+i} value={progId + ":u:" + i}>{st.name}</option>)}
             </select>
@@ -1534,52 +1380,114 @@ export default function ProgressionWheel() {
               )}
             </div>
           )}
-          {!structSel && <p className="keytag" style={{ marginTop:8 }}>
-            Choose a structure to write the whole song out in {keyLabel}.</p>}
-          {structSel && (() => {
-            let totalBars = 0;
-            const secDefs = [], seq = [];
-            structSel.plan.forEach(row => {
-              const L = letterFor(row.sec);
-              const usedC = chords2 && contrast.sec === L;
-              const cs = padEven(resolveWith(row.nums, poolFor(L)).map(c => c.name));
-              const str = (usedC ? "② " : "") + cs.join(cs.length > 6 ? "  |  " : " – ");
-              let def = secDefs.find(d => d.base === L && d.chordsStr === str);
-              if (!def) {
-                const nth = secDefs.filter(d => d.base === L).length;
-                def = { base: L, sym: L + (nth ? nth + 1 : ""), word: LETTER_WORD[L] || row.sec.toLowerCase(),
-                  chordsStr: str, note: row.note, bars: cs.length };
-                secDefs.push(def);
-              } else if (!def.note && row.note) def.note = row.note;
-              totalBars += cs.length * row.reps;
-              const last = seq[seq.length - 1];
-              if (last && last.sym === def.sym) last.reps += row.reps; else seq.push({ sym: def.sym, reps: row.reps });
-            });
-            return (
-              <div>
-                <div className="struct" style={{ borderTop:"none", marginTop:4, paddingTop:4 }}>
-                  <div className="stname">{structSel.st.name} — in {keyLabel}</div>
-                </div>
-                {secDefs.map((d, i) => (
-                  <div key={i} className="arr">
-                    <div className="arrsec"><b className="sym">{d.sym}</b> {d.word}
-                      <span className="arrreps"> · {d.bars} bar{d.bars > 1 ? "s" : ""}</span></div>
-                    <div className="arrch">{d.chordsStr}</div>
-                    {d.note && <div className="arrnote">{d.note}</div>}
+
+          <div className="row" style={{ marginTop:10, gap:6, alignItems:"center" }}>
+            <span className="keytag" style={{ marginRight:2 }}>Scale ({keyLabel}):</span>
+            {scaleSemis.map((s, i) => (
+              <span key={i} className={"npill nsm" + (pentSemis.includes(s) ? " npent" : "")}>{SEMI_NAME[(tonic + s) % 12]}</span>
+            ))}
+            <button className="mini" onClick={() => setShowLand(v => !v)}>{showLand ? "Hide" : "Landing notes"}</button>
+          </div>
+          {showLand && (
+            <div style={{ marginTop:4 }}>
+              {uniques.map((c, i) => {
+                const tones = chordIvs(c.quality).map(x => (c.root + x) % 12);
+                const chrom = tones.some(t => !scaleNotes.includes(t));
+                return (
+                  <div key={i} className="mrow">
+                    <span className="pill" style={{ background: FN_COLOR[c.func], color: FN_TEXT[c.func] }}>{c.name}</span>
+                    {tones.map((t, j) => <span key={j} className={"npill nsm" + (!scaleNotes.includes(t) ? " nchrom" : "")}>{SEMI_NAME[t]}</span>)}
+                    {chrom && <span className="keytag" style={{ color:GOLD }}>chromatic</span>}
                   </div>
-                ))}
-                <div className="formline">
-                  {seq.map((s, i) => <span key={i} className="formtok">{s.sym}{s.reps > 1 ? <i>×{s.reps}</i> : null}</span>)}
+                );
+              })}
+              <p className="keytag" style={{ marginTop:6 }}>
+                Land long notes, downbeats and phrase endings on the playing chord's notes — root and 3rd
+                strongest. Gold notes sit outside the key: strong landings during that chord's bar only.
+              </p>
+            </div>
+          )}
+
+          {(() => {
+            const groups = [];
+            sections.insts.forEach(d => {
+              const g = groups[groups.length - 1];
+              if (g && g.base === d.base) g.items.push(d);
+              else groups.push({ base: d.base, word: d.word, items: [d] });
+            });
+            return groups.map((g, gi) => (
+              <div key={gi} className="sgrp" style={{ borderColor: (SEC_COL[g.base] || "#2A3442") + "55" }}>
+                <div className="sgrplbl" style={{ color: SEC_COL[g.base] || "#8B94A3" }}>
+                  {g.word}{g.items.length > 1 ? "s ×" + g.items.length : ""}
                 </div>
-                <div className="struct">
-                  <div className="sttip">{structSel.st.tip}</div>
-                  <p className="keytag" style={{ marginTop:8 }}>
-                    ≈ {totalBars} bars at one chord per bar — halve or double chord durations to taste.</p>
+                {g.items.map((d, di) => {
+            const sec = secMelos[d.key] || { flat: [] };
+            const cols = d.cs.length * meloBeats;
+            const open = !!openSecs[d.key];
+            const has = sec.flat.some(a => a.length);
+            const donor = !has && sections.insts.find(o => o.base === d.base && o.key !== d.key
+              && (secMelos[o.key] || { flat: [] }).flat.some(a => a.length));
+            const now = playing && curInst === d.key;
+            const acc = SEC_COL[d.base] || "#EDE7DA";
+            return (
+              <div key={di} className={"arr" + (now ? " playnow" : "")}
+                style={now ? { borderLeft: "3px solid " + acc } : null}>
+                <div className="row" style={{ justifyContent:"space-between", alignItems:"baseline" }}>
+                  <div className="arrsec" onClick={() => startMetro(d.startBar)} style={{ cursor:"pointer" }}
+                    title="Play from here">
+                    <b className="sym" style={{ color: acc }}>{now ? "▶ " : ""}{d.key}</b> {d.word}
+                    <span className="arrreps"> · {d.nbars} bar{d.nbars > 1 ? "s" : ""}{d.usedC ? " · ②" : ""}</span></div>
+                  <div className="row" style={{ gap:5 }}>
+                    <button className="mini" onClick={() => startMetro(d.startBar)} title="Play from here">▶</button>
+                    {donor && <button className="mini" onClick={() => copyMelody(donor.key, d.key)}>copy {donor.key}</button>}
+                    <button className="mini" onClick={() => setOpenSecs({ ...openSecs, [d.key]: !open })}>
+                      {open ? "▾" : "▸"} melody{has ? " ●" : ""}
+                    </button>
+                  </div>
                 </div>
+                <div className="arrch">{d.str}</div>
+                {d.note && <div className="arrnote">{d.note}</div>}
+                {open && (
+                  <div className="mscroll" style={{ marginTop:8 }}>
+                    <div className="mline" style={{ gridTemplateColumns:`36px repeat(${cols}, minmax(15px,1fr))` }}>
+                      <span />
+                      {d.cs.map((c, b) => (
+                        <span key={b} className="mbar" style={{ gridColumn:`span ${meloBeats}`,
+                          background: FN_COLOR[c.func || "T"], color: FN_TEXT[c.func || "T"] }}>{c.name}</span>
+                      ))}
+                    </div>
+                    {[...scaleSemis.keys()].reverse().map(deg => (
+                      <div key={deg} className="mline" style={{ gridTemplateColumns:`36px repeat(${cols}, minmax(15px,1fr))` }}>
+                        <span className="mnote">{SEMI_NAME[(tonic + scaleSemis[deg]) % 12]}</span>
+                        {Array.from({ length: cols }, (_, c) => (
+                          <div key={c} onClick={() => tapMelo(d.key, c, deg)}
+                            className={"mcell" + ((sec.flat[c] || []).includes(deg) ? " on" : "")
+                              + (playing && curQ && curQ.sym === d.key && curQ.col === c ? " colnow" : "")
+                              + (c % meloBeats === 0 && c > 0 ? " b0" : c % 2 === 0 && c > 0 ? " bt" : "")} />
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             );
+          })}
+              </div>
+            ));
           })()}
+
+          <div className="struct">
+            {structSel && <div className="sttip">{structSel.st.tip}</div>}
+            <p className="keytag" style={{ marginTop:8 }}>
+              {structSel
+                ? <>≈ {sections.totalBars} bars at one chord per bar. Every pass has its own melody — "copy"
+                  duplicates an earlier sibling's tune as a starting point, then vary it.</>
+                : <>Choose a structure above to write the song out pass by pass, each with its own melody —
+                  or sketch over the loop here.</>}
+            </p>
+          </div>
         </div>
+
 
         {/* songs */}
         <div className="panel">
