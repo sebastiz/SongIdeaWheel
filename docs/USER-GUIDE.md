@@ -62,10 +62,11 @@ No sound on iPhone? Check the ring/silent switch — it mutes all web audio.
 
 ## Song & melody
 
-Structure and melody live in one panel. Choose a form and each section appears with its chords and
-a collapsible **melody** grid (● marks sections that have one). Each section's melody is independent
-— write different tunes for verse, chorus and bridge — and plays on that section's every pass during
-structure playback. With no structure selected, a single Loop section carries the melody. The scale
+Structure and melody live in one panel, and the song is listed in performance order — one entry per
+pass, so Verse ×4 appears as V1 V2 V3 V4, each with its own collapsible **melody** grid (● marks a
+pass that has notes). Write a different tune for every verse if you like, or tap **copy V1** on an
+empty pass to seed it from an earlier sibling and then vary it. Playback follows each pass's own
+melody through the whole song. With no structure selected, a single Loop entry carries the melody. The scale
 strip and a collapsible landing-notes reference sit at the top of the panel. Melodies are stored as
 scale degrees anchored to chords, so they survive edits and transpose with the key.
 

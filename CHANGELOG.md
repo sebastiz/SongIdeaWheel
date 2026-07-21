@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.7
+- Song write-out grouping: adjacent passes of the same section type sit inside a colour-coded
+  bounding box with a group label (VERSES x2, CHORUS ...); section badges take the same colour.
+
+## 3.6
+- Per-pass melodies: the Song & melody panel now lists the song in performance order, one entry per
+  pass (Verse ×4 → V1 V2 V3 V4), each with its own collapsible melody grid; "copy" seeds a pass from
+  an earlier sibling. Playback follows each pass's own melody. The separate section legend and form
+  line are gone — the sequential list *is* the structure.
+
 ## 3.5
 - Melody and song structure merged into one "Song & melody" panel: each section of the chosen
   structure carries its own collapsible melody grid, so the melody develops through the song
