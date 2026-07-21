@@ -517,7 +517,11 @@ const SEC_COL = { V:"#54B79D", C:"#E0B85A", B:"#B7A6E0", P:"#7FB4D8", I:"#8B94A3
 
 /* ===== midi export ===== */
 const vlq = n => { const b = [n & 0x7f]; while ((n >>= 7)) b.unshift((n & 0x7f) | 0x80); return b; };
-function midiBytes(bpm, beatsPerBar, bars, drumPat) {
+// meloCols (optional): flat list of eighth-columns aligned to bars × (beatsPerBar*2),
+// each column a list of absolute MIDI note numbers. Runs of the same note across
+// adjacent columns are merged into one held note (legato) so the exported line
+// flows the way it plays.
+function midiBytes(bpm, beatsPerBar, bars, drumPat, meloCols) {
   const T = 480, ev = (arr, dt, ...bytes) => arr.push(...vlq(dt), ...bytes);
   const trk = arr => {
     const body = [...arr, 0, 0xff, 0x2f, 0];
@@ -542,8 +546,28 @@ function midiBytes(bpm, beatsPerBar, bars, drumPat) {
       pend = T / 2 - 60;
     }
   }
-  const head = [0x4d,0x54,0x68,0x64, 0,0,0,6, 0,1, 0, drumPat ? 3 : 2, (T>>8)&255, T&255];
-  return new Uint8Array([...head, ...trk(tempo), ...trk(chordsT), ...(drumPat ? [trk(drumsT)] : [])]);
+  const meloT = [];
+  let hasMelo = false;
+  if (meloCols && meloCols.length) {
+    const EI = T / 2, N = meloCols.length;                        // ticks per eighth
+    const at = (i, note) => (meloCols[i] || []).includes(note);
+    const evs = [];
+    for (let i = 0; i < N; i++) for (const note of (meloCols[i] || [])) {
+      if (i > 0 && at(i - 1, note)) continue;                     // continuation of a held note
+      let run = 1;
+      while (i + run < N && at(i + run, note)) run++;
+      evs.push({ t: i * EI, on: 1, note });
+      evs.push({ t: (i + run) * EI, on: 0, note });
+    }
+    hasMelo = evs.length > 0;
+    evs.sort((a, b) => a.t - b.t || a.on - b.on);                 // note-offs before note-ons at a tick
+    let last = 0;
+    for (const e of evs) { ev(meloT, e.t - last, e.on ? 0x91 : 0x81, e.note, e.on ? 92 : 0); last = e.t; }
+  }
+  const nTrk = 2 + (drumPat ? 1 : 0) + (hasMelo ? 1 : 0);
+  const head = [0x4d,0x54,0x68,0x64, 0,0,0,6, 0,1, 0, nTrk, (T>>8)&255, T&255];
+  return new Uint8Array([...head, ...trk(tempo), ...trk(chordsT),
+    ...(drumPat ? trk(drumsT) : []), ...(hasMelo ? trk(meloT) : [])]);
 }
 
 /* ===== discovery tools ===== */
@@ -975,13 +999,28 @@ export default function ProgressionWheel() {
   const exportMidi = () => {
     try {
       const bars = (structBars && structBars.length) ? structBars : chords.map(c => ({ chord:c }));
-      const bytes = midiBytes(effBpm, rhythm.pattern.length / 2, bars, DRUMS[drum].pattern);
+      // flatten the per-section melody grids into eighth-columns aligned to `bars`
+      const melBase = (tonic > 6 ? 60 : 72) + tonic;
+      const loopSec = secMelos.L1 || Object.values(secMelos)[0];
+      const meloCols = [];
+      let anyMelo = false;
+      bars.forEach((b, bi) => {
+        const secm = b.inst != null ? secMelos[b.inst] : loopSec;
+        const barCols = secm && secm.bars[b.inst != null ? b.mb : bi % (secm.bars.length || 1)];
+        for (let c = 0; c < meloBeats; c++) {
+          const degs = (barCols && barCols[c]) || [];
+          if (degs.length) anyMelo = true;
+          meloCols.push(degs.map(d => melBase + scaleSemis[d]));
+        }
+      });
+      const bytes = midiBytes(effBpm, rhythm.pattern.length / 2, bars, DRUMS[drum].pattern, anyMelo ? meloCols : null);
       const url = URL.createObjectURL(new Blob([bytes], { type:"audio/midi" }));
       const a = document.createElement("a");
       a.href = url; a.download = "progression-wheel.mid";
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 5000);
-      setIoNote("MIDI exported — chords" + (DRUMS[drum].pattern ? " + drums" : "") + " at " + effBpm + " bpm.");
+      setIoNote("MIDI exported — chords" + (DRUMS[drum].pattern ? " + drums" : "")
+        + (anyMelo ? " + melody" : "") + " at " + effBpm + " bpm.");
     } catch (e) { setIoNote("Export failed in this viewer — try on desktop."); }
   };
 
