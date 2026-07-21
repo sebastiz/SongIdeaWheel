@@ -29,6 +29,16 @@ songs, colour moves, song structures, a playable rhythm section and a melody gri
 - **Fingerings** — tap any chord for guitar chord boxes (open + barre shapes) and highlighted piano
   keys
 
+## Documentation
+
+- **[User guide](docs/USER-GUIDE.md)** — every panel, control and interaction, with the music-theory
+  reasoning behind them
+- **[Architecture](docs/ARCHITECTURE.md)** — the chord pipeline, audio scheduler, melody-persistence
+  model, MIDI writer and build
+- **[Contributing](CONTRIBUTING.md)** — the app is data-driven; adding progressions, strum patterns,
+  drum beats or structures is a one-line table entry
+- **[Changelog](CHANGELOG.md)**
+
 ## Development
 
 `src/progression-wheel.jsx` is the source of truth — a single-file React component.

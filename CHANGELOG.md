@@ -1,0 +1,39 @@
+# Changelog
+
+## 3.5
+- Melody and song structure merged into one "Song & melody" panel: each section of the chosen
+  structure carries its own collapsible melody grid, so the melody develops through the song
+  (verse / chorus / bridge tunes are independent) and structure playback plays each section's own
+  melody. Loop mode gets a single Loop section grid.
+- Compact single-row controls: key, genre, emotion, overlay toggles and chord-colour switch.
+- Removed: ear training, chord finders (destination finder + bass harmonisations).
+
+## 3.4
+- Melody persists across everything: emotion/genre/progression changes (positional carry-over),
+  key changes (degree-based transposition), colour changes.
+
+## 3.3
+- Melody anchored to chord identities: chord inserts/removals/swaps no longer wipe the grid.
+
+## 3.2
+- Melody grid at eighth-note resolution; pre-compiled `index.html` build introduced (in-browser JSX
+  compilation was the dominant mobile load cost).
+
+## 3.1
+- Melody grid spans the whole loop (was a one-bar ostinato), quarter-note columns, polyphony,
+  chord-labelled bar headers.
+
+## 3.0
+- Triads / 7ths / 9ths colour levels; contrast loops (second progression per section);
+  tap-melody sequencer; dice; More-colour menu (borrowed, mediants, tritone subs);
+  destination finder; descending-bass harmonisations; MIDI export; sketches; ear training.
+
+## 2.x
+- Rhythm section: ~30 strum patterns incl. 3/4 & 6/8, five instrument voices, drum kits, swing,
+  structure playback, live section readout; melody landing-notes panel; chord fingering cards;
+  colour-move dropdowns; songs panel reacts to edits; slim rewrite (-31%).
+
+## 1.x
+- The wheel with function-coloured progressions, genre/emotion selection, parallel & secondary
+  dominant overlays and tap-to-apply, song references with original keys, shorthand structure
+  write-outs, chord swapping.
