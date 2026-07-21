@@ -344,15 +344,75 @@ function playHit(ctx, t, chord, sym, instr, slotDur) {
   });
 }
 
-function leadNote(ctx, t, midi, dur) {
-  const o = ctx.createOscillator();
-  o.type = "triangle"; o.frequency.value = midiHz(midi);
-  o.connect(env(ctx, t, 0.12, 0.012, dur));
-  o.start(t); o.stop(t + dur + 0.05);
-  const o2 = ctx.createOscillator();
-  o2.type = "sine"; o2.frequency.value = midiHz(midi) * 2;
-  o2.connect(env(ctx, t, 0.035, 0.012, dur * 0.7));
-  o2.start(t); o2.stop(t + dur + 0.05);
+// Melody lead voices — chosen from the "Lead" dropdown. Each spec is a stack of
+// partials (oscillator type · harmonic multiple · relative level) plus an
+// envelope: atk = attack, rel = release tail, vol = peak, sus = sustain level
+// (0 = percussive decay, >0 = held tone). lp adds a low-pass; vib adds vibrato.
+const LEAD_VOICES = [
+  ["synth","Synth lead"], ["sine","Soft sine"], ["triangle","Mellow triangle"],
+  ["square","Chiptune square"], ["saw","Bright saw"], ["flute","Flute"],
+  ["pluck","Pluck"], ["bell","Bell"], ["musicbox","Music box"],
+  ["ep","Electric piano"], ["strings","Strings"], ["brass","Brass"],
+  ["organ","Organ"], ["voice","Voice (ah)"], ["glass","Glass pad"], ["whistle","Whistle"],
+];
+const LEAD_SPECS = {
+  synth:    { parts:[["triangle",1,1],["sine",2,0.3]],                 atk:0.012, rel:0.13, vol:0.12, sus:0.6 },
+  sine:     { parts:[["sine",1,1],["sine",2,0.1]],                     atk:0.02,  rel:0.18, vol:0.13, sus:0.7 },
+  triangle: { parts:[["triangle",1,1]],                               atk:0.01,  rel:0.15, vol:0.13, sus:0.65 },
+  square:   { parts:[["square",1,0.6]],                               atk:0.005, rel:0.07, vol:0.085, sus:0.55, lp:2600 },
+  saw:      { parts:[["sawtooth",1,0.6]],                             atk:0.008, rel:0.13, vol:0.085, sus:0.6, lp:3200 },
+  flute:    { parts:[["sine",1,1],["sine",2,0.05]],                   atk:0.05,  rel:0.15, vol:0.15, sus:0.8, vib:true },
+  pluck:    { parts:[["triangle",1,1],["sine",3,0.15]],               atk:0.003, rel:0.3,  vol:0.14, sus:0 },
+  bell:     { parts:[["sine",1,1],["sine",2.76,0.5],["sine",5.4,0.2]],atk:0.002, rel:0.6,  vol:0.11, sus:0 },
+  musicbox: { parts:[["sine",1,1],["sine",4,0.35],["sine",8,0.08]],   atk:0.002, rel:0.45, vol:0.1,  sus:0 },
+  ep:       { parts:[["sine",1,1],["triangle",2,0.25],["sine",5,0.06]],atk:0.004,rel:0.4,  vol:0.13, sus:0.15 },
+  strings:  { parts:[["sawtooth",1,0.5],["sawtooth",1.004,0.5]],      atk:0.1,   rel:0.28, vol:0.08, sus:0.85, lp:2400, vib:true },
+  brass:    { parts:[["sawtooth",1,0.7],["square",1,0.1]],            atk:0.035, rel:0.15, vol:0.085, sus:0.7, lp:2800 },
+  organ:    { parts:[["sine",1,1],["sine",2,0.5],["sine",3,0.3],["sine",4,0.15]], atk:0.006, rel:0.06, vol:0.075, sus:0.9 },
+  voice:    { parts:[["sawtooth",1,0.4],["sine",1,0.45]],             atk:0.06,  rel:0.18, vol:0.1,  sus:0.8, lp:1500, vib:true },
+  glass:    { parts:[["sine",1,1],["sine",3,0.2],["triangle",2,0.15]],atk:0.07,  rel:0.32, vol:0.1,  sus:0.75 },
+  whistle:  { parts:[["sine",1,1],["sine",2,0.02]],                   atk:0.03,  rel:0.1,  vol:0.12, sus:0.85, vib:true },
+};
+// legato=true softens the attack and lets the note ring past its slot so a
+// moving line flows together instead of re-articulating on every eighth.
+function leadNote(ctx, t, midi, dur, kind = "synth", legato = false) {
+  const V = LEAD_SPECS[kind] || LEAD_SPECS.synth;
+  const hz = midiHz(midi);
+  const atk = legato ? Math.max(V.atk, 0.03) : V.atk;
+  const rel = legato ? V.rel * 1.6 : V.rel;
+  const peak = V.vol, sus = peak * V.sus;
+  const t1 = t + atk;                          // reach peak
+  const t2 = Math.max(t1 + 0.01, t + dur);     // sustain end / release start
+  const t3 = t2 + rel;                         // silence
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.linearRampToValueAtTime(peak, t1);
+  if (V.sus > 0) {
+    g.gain.exponentialRampToValueAtTime(Math.max(0.0002, sus), Math.min(t2, t1 + 0.12));
+    g.gain.setValueAtTime(Math.max(0.0002, sus), t2);
+  }
+  g.gain.exponentialRampToValueAtTime(0.0006, t3);
+  g.connect(ctx.destination);
+  let out = g;
+  if (V.lp) {
+    const f = ctx.createBiquadFilter();
+    f.type = "lowpass"; f.frequency.value = V.lp; f.Q.value = 0.7;
+    f.connect(g); out = f;
+  }
+  let lfoG = null;
+  if (V.vib) {
+    const lfo = ctx.createOscillator(); lfoG = ctx.createGain();
+    lfo.type = "sine"; lfo.frequency.value = 5.2; lfoG.gain.value = hz * 0.006;
+    lfo.connect(lfoG); lfo.start(t + atk); lfo.stop(t3 + 0.05);
+  }
+  V.parts.forEach(([type, mult, amp]) => {
+    const o = ctx.createOscillator();
+    o.type = type; o.frequency.value = hz * mult;
+    if (lfoG) lfoG.connect(o.frequency);
+    const pg = ctx.createGain(); pg.gain.value = amp;
+    o.connect(pg).connect(out);
+    o.start(t); o.stop(t3 + 0.05);
+  });
 }
 
 /* ===== fingering diagrams ===== */
@@ -457,7 +517,11 @@ const SEC_COL = { V:"#54B79D", C:"#E0B85A", B:"#B7A6E0", P:"#7FB4D8", I:"#8B94A3
 
 /* ===== midi export ===== */
 const vlq = n => { const b = [n & 0x7f]; while ((n >>= 7)) b.unshift((n & 0x7f) | 0x80); return b; };
-function midiBytes(bpm, beatsPerBar, bars, drumPat) {
+// meloCols (optional): flat list of eighth-columns aligned to bars × (beatsPerBar*2),
+// each column a list of absolute MIDI note numbers. Runs of the same note across
+// adjacent columns are merged into one held note (legato) so the exported line
+// flows the way it plays.
+function midiBytes(bpm, beatsPerBar, bars, drumPat, meloCols) {
   const T = 480, ev = (arr, dt, ...bytes) => arr.push(...vlq(dt), ...bytes);
   const trk = arr => {
     const body = [...arr, 0, 0xff, 0x2f, 0];
@@ -482,8 +546,28 @@ function midiBytes(bpm, beatsPerBar, bars, drumPat) {
       pend = T / 2 - 60;
     }
   }
-  const head = [0x4d,0x54,0x68,0x64, 0,0,0,6, 0,1, 0, drumPat ? 3 : 2, (T>>8)&255, T&255];
-  return new Uint8Array([...head, ...trk(tempo), ...trk(chordsT), ...(drumPat ? [trk(drumsT)] : [])]);
+  const meloT = [];
+  let hasMelo = false;
+  if (meloCols && meloCols.length) {
+    const EI = T / 2, N = meloCols.length;                        // ticks per eighth
+    const at = (i, note) => (meloCols[i] || []).includes(note);
+    const evs = [];
+    for (let i = 0; i < N; i++) for (const note of (meloCols[i] || [])) {
+      if (i > 0 && at(i - 1, note)) continue;                     // continuation of a held note
+      let run = 1;
+      while (i + run < N && at(i + run, note)) run++;
+      evs.push({ t: i * EI, on: 1, note });
+      evs.push({ t: (i + run) * EI, on: 0, note });
+    }
+    hasMelo = evs.length > 0;
+    evs.sort((a, b) => a.t - b.t || a.on - b.on);                 // note-offs before note-ons at a tick
+    let last = 0;
+    for (const e of evs) { ev(meloT, e.t - last, e.on ? 0x91 : 0x81, e.note, e.on ? 92 : 0); last = e.t; }
+  }
+  const nTrk = 2 + (drumPat ? 1 : 0) + (hasMelo ? 1 : 0);
+  const head = [0x4d,0x54,0x68,0x64, 0,0,0,6, 0,1, 0, nTrk, (T>>8)&255, T&255];
+  return new Uint8Array([...head, ...trk(tempo), ...trk(chordsT),
+    ...(drumPat ? trk(drumsT) : []), ...(hasMelo ? trk(meloT) : [])]);
 }
 
 /* ===== discovery tools ===== */
@@ -515,6 +599,8 @@ export default function ProgressionWheel() {
   const [curLabel, setCurLabel] = useState(null);
   const [bpmSt, setBpmSt] = useState({ key:"", val:0 });
   const [instr, setInstr] = useState("guitar");
+  const [melInstr, setMelInstr] = useState("synth");        // melody lead voice
+  const [legato, setLegato] = useState(true);               // merge/flow melody notes
   const [patSel, setPatSel] = useState({ key:"", id:"" });
   const [drum, setDrum] = useState("off");
   const [colour, setColour] = useState("triads");           // triads | sevenths
@@ -790,7 +876,7 @@ export default function ProgressionWheel() {
     if (!from) return;
     setMelos({ progId, secs: { ...melos.secs, [toKey]: { ids: [...from.ids], bars: from.bars.map(b => b.map(a => [...a])) } } });
   };
-  meloRef.current = { bySym: secMelos, scale: scaleSemis, tonic };
+  meloRef.current = { bySym: secMelos, scale: scaleSemis, tonic, melInstr, legato };
   const tapMelo = (sym, c, deg) => {
     const sec = secMelos[sym];
     const bars = sec.bars.map(bar => bar.map(a => [...a]));
@@ -860,9 +946,22 @@ export default function ProgressionWheel() {
           }
           const sec = sym && mel.bySym[sym];
           if (sec && sec.flat.length) {
-            const col = (mb * L + i) % sec.flat.length;
+            const N = sec.flat.length;
+            const col = (mb * L + i) % N;
             const base = (mel.tonic > 6 ? 60 : 72) + mel.tonic;
-            (sec.flat[col] || []).forEach(deg => leadNote(m.ctx, t, base + mel.scale[deg], eighth * 0.92));
+            (sec.flat[col] || []).forEach(deg => {
+              if (mel.legato) {
+                // merge a run of the same note into one held tone; extend a hair
+                // past the run so consecutive different notes connect too
+                const prev = sec.flat[col - 1] || [];
+                if (col > 0 && prev.includes(deg)) return;       // still ringing from last slot
+                let run = 1;
+                while (col + run < N && (sec.flat[col + run] || []).includes(deg)) run++;
+                leadNote(m.ctx, t, base + mel.scale[deg], eighth * (run + 0.35), mel.melInstr, true);
+              } else {
+                leadNote(m.ctx, t, base + mel.scale[deg], eighth * 0.92, mel.melInstr, false);
+              }
+            });
             const q = { sym, col };
             setTimeout(() => setCurQ(q), Math.max(0, (t - m.ctx.currentTime) * 1000));
           }
@@ -900,13 +999,28 @@ export default function ProgressionWheel() {
   const exportMidi = () => {
     try {
       const bars = (structBars && structBars.length) ? structBars : chords.map(c => ({ chord:c }));
-      const bytes = midiBytes(effBpm, rhythm.pattern.length / 2, bars, DRUMS[drum].pattern);
+      // flatten the per-section melody grids into eighth-columns aligned to `bars`
+      const melBase = (tonic > 6 ? 60 : 72) + tonic;
+      const loopSec = secMelos.L1 || Object.values(secMelos)[0];
+      const meloCols = [];
+      let anyMelo = false;
+      bars.forEach((b, bi) => {
+        const secm = b.inst != null ? secMelos[b.inst] : loopSec;
+        const barCols = secm && secm.bars[b.inst != null ? b.mb : bi % (secm.bars.length || 1)];
+        for (let c = 0; c < meloBeats; c++) {
+          const degs = (barCols && barCols[c]) || [];
+          if (degs.length) anyMelo = true;
+          meloCols.push(degs.map(d => melBase + scaleSemis[d]));
+        }
+      });
+      const bytes = midiBytes(effBpm, rhythm.pattern.length / 2, bars, DRUMS[drum].pattern, anyMelo ? meloCols : null);
       const url = URL.createObjectURL(new Blob([bytes], { type:"audio/midi" }));
       const a = document.createElement("a");
       a.href = url; a.download = "progression-wheel.mid";
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 5000);
-      setIoNote("MIDI exported — chords" + (DRUMS[drum].pattern ? " + drums" : "") + " at " + effBpm + " bpm.");
+      setIoNote("MIDI exported — chords" + (DRUMS[drum].pattern ? " + drums" : "")
+        + (anyMelo ? " + melody" : "") + " at " + effBpm + " bpm.");
     } catch (e) { setIoNote("Export failed in this viewer — try on desktop."); }
   };
 
@@ -1062,7 +1176,7 @@ export default function ProgressionWheel() {
       `}</style>
 
       <div className="wrap">
-        <div className="eyebrow">Songwriting sketchpad · v3.9</div>
+        <div className="eyebrow">Songwriting sketchpad · v4.0</div>
         <h1>The Progression Wheel</h1>
         <p className="sub">Pick a key, a genre and a feeling — the wheel does the rest.</p>
 
@@ -1105,7 +1219,7 @@ export default function ProgressionWheel() {
 
           <div className="selrow" style={{ marginTop:12 }}>
             <label className="selwrap">
-              <span className="lbl" style={{ margin:0, color:GOLD }}>Add secondary dominant</span>
+              <span className="lbl" style={{ margin:0, color:GOLD, whiteSpace:"nowrap" }}>2ndary dom</span>
               <select value="" onChange={e => { const v = e.target.value; if (v !== "" && secondaries[+v]) applySecondary(secondaries[+v]); }}>
                 <option value="">Choose…</option>
                 {secondaries.map((s, i) => {
@@ -1117,14 +1231,14 @@ export default function ProgressionWheel() {
               </select>
             </label>
             <label className="selwrap">
-              <span className="lbl" style={{ margin:0, color:LAV }}>Parallel swap</span>
+              <span className="lbl" style={{ margin:0, color:LAV, whiteSpace:"nowrap" }}>p-lel cord</span>
               <select value="" onChange={e => { const v = e.target.value; if (v !== "" && parallels[+v]) applyParallel(parallels[+v]); }}>
                 <option value="">Choose…</option>
                 {parallels.map((p, i) => <option key={i} value={i}>{p.of.name + " → " + p.name}</option>)}
               </select>
             </label>
             <label className="selwrap">
-              <span className="lbl" style={{ margin:0 }}>More colour</span>
+              <span className="lbl" style={{ margin:0, whiteSpace:"nowrap" }}>More colour</span>
               <select value="" onChange={e => {
                 const v = e.target.value; if (v === "") return;
                 const [kind, a, b, c] = v.split("~");
@@ -1290,7 +1404,11 @@ export default function ProgressionWheel() {
         <div className="panel">
           <div className="row" style={{ justifyContent:"space-between", alignItems:"center" }}>
             <div className="progtitle" style={{ fontSize:17 }}>Rhythm</div>
-            <div className="row" style={{ gap:7 }}>
+            <div className="row" style={{ gap:7, alignItems:"center" }}>
+              <div className={"tog" + (legato ? " on" : "")} onClick={() => setLegato(v => !v)}
+                title="Merge the melody notes into one flowing line — smoother, less stodgy">
+                <div className="sw" /> Legato
+              </div>
               <button className="mini" onClick={() => nudgeBpm(-5)}>−5</button>
               <span className="bpmval">{effBpm} bpm</span>
               <button className="mini" onClick={() => nudgeBpm(5)}>+5</button>
@@ -1320,6 +1438,12 @@ export default function ProgressionWheel() {
                 <option value="organ">Organ</option>
                 <option value="bass">Bass</option>
                 <option value="dbass">Double bass</option>
+              </select>
+            </label>
+            <label className="selwrap">
+              <span className="lbl" style={{ margin:0 }}>Lead</span>
+              <select value={melInstr} onChange={e => setMelInstr(e.target.value)}>
+                {LEAD_VOICES.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
               </select>
             </label>
             <label className="selwrap">
