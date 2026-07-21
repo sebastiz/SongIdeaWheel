@@ -209,16 +209,62 @@ const PATTERN_DEFAULT = { axis:"pop", axisMinor:"drive", three:"rock8", blues:"s
 const BPM_DEFAULT = { axis:96, axisMinor:84, three:140, blues:92, doowop:66, jazz:120,
   mixo:112, andalusian:104, pachelbel:72 };
 
+// Drum kits — space-separated eighth slots, each a mix of K (kick) S (snare)
+// H (hi-hat), "." = rest. 4/4 kits are 8 slots; 3/4 and 6/8 kits are 6 slots so
+// they line up with the waltz / 6-8 strum patterns. Only K/S/H make sound.
 const DRUMS = {};
 [
 ["off","No drums",null],
+// —— straight 4/4 ——
 ["rock","Rock backbeat","KH H SH H KH H SH H"],
 ["pop","Pop punch","KH H SH KH H KH SH H"],
 ["four","Four-on-the-floor","K H KS H K H KS H"],
+["disco","Disco","KH H KSH H KH H KSH H"],
+["house","House 4×4","KSH H SH H KSH H SH H"],
+["halftime","Half-time","KH H H H SH H H H"],
+["motown","Motown backbeat","KH SH SH SH KH SH SH SH"],
+["stomp","Stomp-clap anthem","KH H KH H SH H H H"],
+["twostep","Two-step","KH H SH H KH KH SH H"],
+["surf","Surf beat","KH H SH H KH SH SH H"],
+["glam","Glam stomp","KH KH SH KH KH KH SH KH"],
+// —— punchy / heavy ——
+["punk","Punk driver","KH KH SH KH KH KH SH KH"],
+["metal","Metal double-kick","K K SK K K K SK K"],
+["dbeat","D-beat","KS H KS H KS H KS H"],
+["blastish","Blast-ish","KS KS KS KS KS KS KS KS"],
+// —— funk / groove ——
+["funk","Funk groove","KH H SH KH H H SH H"],
+["funkghost","Funk ghost notes","KH SH H KH SH KH SH H"],
+["purdie","Half-time shuffle","KH SH SH KH SH H SH SH"],
+["clave","Songo / clave feel","KH H SH KH KH H SH H"],
+// —— hip-hop / electronic ——
+["boombap","Boom-bap","KH H SH H KH KH SH H"],
+["trap","Trap","KH H H H SH H KH H"],
+["rnb","R&B groove","KH H SH H H KH SH H"],
+["breakbeat","Breakbeat","KH H SH KH H SH SH H"],
+["dnb","Drum & bass","KH H H SH H KH SH H"],
+["boomclap","Boom-clap","KH H SH H KH H SH H"],
+// —— world / roots ——
+["reggae","Reggae one-drop","H H KSH H H H KSH H"],
+["steppers","Reggae steppers","KH H KSH H KH H KSH H"],
+["ska","Ska upbeat","K SH K SH K SH K SH"],
+["samba","Samba","KSH H KH SH KSH H KH SH"],
+["bossa","Bossa nova","KH SH H SH KH H SH SH"],
+["tango","Tango","KH H H SH KH H H SH"],
+["diddley","Bo Diddley","KH H KH SH H KH SH H"],
+["afrobeat","Afrobeat","KH SH KH SH KH SH KH SH"],
+// —— roots / traditional ——
 ["shuffle","Shuffle backbeat","K H S H K H S H"],
 ["train","Train beat","KS S S S KS S S S"],
+["march","Military march","KS S KS S KS S KS S"],
+// —— 3/4 ——
 ["waltzkit","Waltz kit (3/4)","K . SH . SH ."],
+["jazzwaltz","Jazz waltz (3/4)","K SH H SH H H"],
+["countrywaltz","Country waltz (3/4)","KH H SH H SH H"],
+// —— 6/8 ——
 ["kit68","6/8 kit","K H H SH H H"],
+["blues68","Blues shuffle (6/8)","KH H H SH H H"],
+["march68","March (6/8)","KS H H SH H H"],
 ].forEach(([id, name, pat]) =>
   DRUMS[id] = { name, pattern: pat ? pat.split(" ").map(s => s === "." ? "" : s) : null });
 
