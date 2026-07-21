@@ -1,0 +1,6 @@
+node_modules/
+package-lock.json
+
+# build intermediates (scripts/build.mjs emits these before writing index.html)
+scripts/.app.jsx
+scripts/.app.min.js
