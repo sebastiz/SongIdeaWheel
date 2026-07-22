@@ -253,6 +253,14 @@ const DRUMS = {};
 ["tango","Tango","KH H H SH KH H H SH"],
 ["diddley","Bo Diddley","KH H KH SH H KH SH H"],
 ["afrobeat","Afrobeat","KH SH KH SH KH SH KH SH"],
+// —— toms & cymbals ——
+["bigbeat","Big beat (crash)","KC H SH H KH H SH H"],
+["discohat","Disco (open hats)","KH O KSH O KH O KSH O"],
+["jazzride","Jazz ride","R H SR H R H SR H"],
+["tribal","Tribal toms","KL L KT T KL L KT T"],
+["tomgroove","Tom groove","KT H ST H KT H ST TL"],
+["floortom","Floor-tom stomp","KL H SL H KL H SL H"],
+["tomfill","Tom-fill backbeat","KH H SH H KH H T L"],
 // —— roots / traditional ——
 ["shuffle","Shuffle backbeat","K H S H K H S H"],
 ["train","Train beat","KS S S S KS S S S"],
@@ -265,6 +273,7 @@ const DRUMS = {};
 ["kit68","6/8 kit","K H H SH H H"],
 ["blues68","Blues shuffle (6/8)","KH H H SH H H"],
 ["march68","March (6/8)","KS H H SH H H"],
+["toms68","6/8 toms","KT H H ST H L"],
 ].forEach(([id, name, pat]) =>
   DRUMS[id] = { name, pattern: pat ? pat.split(" ").map(s => s === "." ? "" : s) : null });
 
@@ -321,6 +330,33 @@ function drumSound(ctx, t, ch, noise) {
     const f = ctx.createBiquadFilter(); f.type = "highpass"; f.frequency.value = 6500;
     n.connect(f); f.connect(env(ctx, t, 0.09, 0.001, 0.045));
     n.start(t); n.stop(t + 0.05);
+  } else if (ch === "O") {                                   // open hi-hat
+    const n = ctx.createBufferSource(); n.buffer = noise; n.loop = true;
+    const f = ctx.createBiquadFilter(); f.type = "highpass"; f.frequency.value = 6500;
+    n.connect(f); f.connect(env(ctx, t, 0.07, 0.001, 0.3));
+    n.start(t); n.stop(t + 0.34);
+  } else if (ch === "C") {                                   // crash cymbal
+    const n = ctx.createBufferSource(); n.buffer = noise; n.loop = true;
+    const f = ctx.createBiquadFilter(); f.type = "highpass"; f.frequency.value = 4000; f.Q.value = 0.5;
+    n.connect(f); f.connect(env(ctx, t, 0.12, 0.001, 1.0));
+    n.start(t); n.stop(t + 1.05);
+  } else if (ch === "R") {                                   // ride cymbal (ping + wash)
+    const n = ctx.createBufferSource(); n.buffer = noise; n.loop = true;
+    const f = ctx.createBiquadFilter(); f.type = "bandpass"; f.frequency.value = 7000; f.Q.value = 0.6;
+    n.connect(f); f.connect(env(ctx, t, 0.045, 0.001, 0.4));
+    n.start(t); n.stop(t + 0.44);
+    const o = ctx.createOscillator();
+    o.type = "square"; o.frequency.value = 520;
+    o.connect(env(ctx, t, 0.03, 0.001, 0.12));
+    o.start(t); o.stop(t + 0.13);
+  } else if (ch === "T" || ch === "L") {                     // toms — mid (T) / low-floor (L)
+    const o = ctx.createOscillator();
+    o.type = "sine";
+    const f0 = ch === "T" ? 180 : 110;
+    o.frequency.setValueAtTime(f0, t);
+    o.frequency.exponentialRampToValueAtTime(f0 * 0.6, t + 0.18);
+    o.connect(env(ctx, t, 0.4, 0.001, 0.22));
+    o.start(t); o.stop(t + 0.25);
   }
 }
 const chordIvs = q => ({ dom:[0,4,7,10], maj7:[0,4,7,11], m7:[0,3,7,10],
@@ -584,10 +620,12 @@ function midiBytes(bpm, beatsPerBar, bars, drumPat, meloCols) {
   const drumsT = [];
   if (drumPat) {
     let pend = 0;
+    const GM = { K:36, S:38, H:42, O:46, C:49, R:51, T:47, L:43 };  // General MIDI drum notes
     for (let bar = 0; bar < bars.length; bar++) for (let s = 0; s < beatsPerBar * 2; s++) {
-      const notes = [...(drumPat[s] || "")].map(c => c === "K" ? 36 : c === "S" ? 38 : 42);
+      const notes = [...(drumPat[s] || "")].map(c => GM[c] ?? 42);
       if (!notes.length) { pend += T / 2; continue; }
-      notes.forEach((n, i) => ev(drumsT, i ? 0 : pend, 0x99, n, n === 42 ? 62 : 92));
+      const vel = n => (n === 42 || n === 46) ? 62 : n === 51 ? 70 : n === 49 ? 85 : 92;
+      notes.forEach((n, i) => ev(drumsT, i ? 0 : pend, 0x99, n, vel(n)));
       notes.forEach((n, i) => ev(drumsT, i ? 0 : 60, 0x89, n, 0));
       pend = T / 2 - 60;
     }
