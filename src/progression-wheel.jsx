@@ -379,63 +379,129 @@ function strumChord(ctx, t, chord, sym) {
     o.start(tt); o.stop(tt + ring + 0.1);
   });
 }
-function playHit(ctx, t, chord, sym, instr, slotDur) {
-  if (instr === "guitar") return strumChord(ctx, t, chord, sym);
-  const iv = chordIvs(chord.quality), rootMid = 48 + chord.root;
-  if (instr === "bass" || instr === "dbass") {
-    const o = ctx.createOscillator();
-    o.frequency.value = midiHz(36 + chord.root + (sym === "U" ? 7 : 0));
-    let dest;
-    if (instr === "bass") {
-      o.type = "sawtooth";
-      const f = ctx.createBiquadFilter();
-      f.type = "lowpass"; f.frequency.value = 420; f.Q.value = 1;
-      o.connect(f); dest = f;
-    } else { o.type = "triangle"; dest = o; }
-    const dec = instr === "dbass" ? 0.75 : 0.35;
-    dest.connect(env(ctx, t, sym === ">" ? 0.30 : 0.20, instr === "dbass" ? 0.022 : 0.006, dec));
-    o.start(t); o.stop(t + dec + 0.1);
-    return;
+// Shared subtractive-synth voice used by the melody, chord and bass engines.
+// V = { parts:[[oscType, harmonicMult, level, detuneCents?]], atk, rel, vol,
+// sus (0..1 sustain level, 0 = percussive decay), lp?, lpEnv? (sweep target =
+// lp*lpEnv), q?, vib? }. dur = time before the release tail starts.
+function synthVoice(ctx, t, midi, vol, V, dur) {
+  const hz = midiHz(midi);
+  const sus = vol * (V.sus || 0);
+  const t1 = t + V.atk, t2 = Math.max(t1 + 0.01, t + dur), t3 = t2 + V.rel;
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.linearRampToValueAtTime(vol, t1);
+  if (V.sus > 0) {
+    g.gain.exponentialRampToValueAtTime(Math.max(0.0002, sus), Math.min(t2, t1 + 0.12));
+    g.gain.setValueAtTime(Math.max(0.0002, sus), t2);
   }
-  const notes = sym === "U" ? iv.slice(1).map(x => rootMid + x) : [rootMid - 12, ...iv.map(x => rootMid + x)];
-  notes.forEach((mid, j) => {
-    if (instr === "organ") {
-      [1, 2, 3].forEach((h, hi) => {
-        const o = ctx.createOscillator(), g = ctx.createGain();
-        o.type = "sine"; o.frequency.value = midiHz(mid) * h;
-        const vol = (sym === ">" ? 0.055 : 0.04) / (hi + 1);
-        const dur = Math.max(0.14, slotDur * 0.92);
-        g.gain.setValueAtTime(0.0001, t);
-        g.gain.linearRampToValueAtTime(vol, t + 0.02);
-        g.gain.setValueAtTime(vol, t + Math.max(0.05, dur - 0.04));
-        g.gain.linearRampToValueAtTime(0.0001, t + dur);
-        o.connect(g).connect(ctx.destination);
-        o.start(t); o.stop(t + dur + 0.05);
-      });
-    } else { // piano — fundamental + partials, hammer attack, longer sustain
-      const freq = midiHz(mid);
-      const vol = sym === ">" ? 0.10 : sym === "U" ? 0.055 : 0.08;
-      const tt = t + j * 0.003, dur = sym === ">" ? 1.1 : 0.8;
-      [[1, 1, "triangle"], [2, 0.28, "sine"], [4, 0.07, "sine"]].forEach(([h, hv, type]) => {
-        const o = ctx.createOscillator();
-        o.type = type; o.frequency.value = freq * h;
-        o.connect(env(ctx, tt, vol * hv, 0.004, dur / (h > 1 ? 2.5 : 1)));
-        o.start(tt); o.stop(tt + dur + 0.1);
-      });
-    }
+  g.gain.exponentialRampToValueAtTime(0.0006, t3);
+  g.connect(ctx.destination);
+  let out = g;
+  if (V.lp) {
+    const f = ctx.createBiquadFilter();
+    f.type = "lowpass"; f.Q.value = V.q || 0.7;
+    if (V.lpEnv) {
+      f.frequency.setValueAtTime(V.lp, t);
+      f.frequency.exponentialRampToValueAtTime(Math.max(180, V.lp * V.lpEnv), t3);
+    } else f.frequency.value = V.lp;
+    f.connect(g); out = f;
+  }
+  let lfoG = null;
+  if (V.vib) {
+    const lfo = ctx.createOscillator(); lfoG = ctx.createGain();
+    lfo.type = "sine"; lfo.frequency.value = 5.2; lfoG.gain.value = hz * 0.006;
+    lfo.connect(lfoG); lfo.start(t + V.atk); lfo.stop(t3 + 0.05);
+  }
+  V.parts.forEach(([type, mult, amp, detune]) => {
+    const o = ctx.createOscillator();
+    o.type = type; o.frequency.value = hz * mult;
+    if (detune) o.detune.value = detune;
+    if (lfoG) lfoG.connect(o.frequency);
+    const pg = ctx.createGain(); pg.gain.value = amp;
+    o.connect(pg).connect(out);
+    o.start(t); o.stop(t3 + 0.05);
   });
 }
+// Chord/harmony instruments (the "Sound" menu). pad:true = sustained (rings the
+// slot); otherwise percussive with a fixed dur. strum = seconds between voices.
+const CHORD_SPECS = {
+  piano:      { parts:[["triangle",1,1],["sine",2,0.28],["sine",4,0.07]], atk:0.004, rel:0.3, vol:0.09, sus:0.12, dur:0.8, strum:0.003 },
+  ep:         { parts:[["sine",1,1],["triangle",2,0.25],["sine",5,0.06]], atk:0.004, rel:0.4, vol:0.09, sus:0.18, dur:0.7 },
+  wurli:      { parts:[["triangle",1,1],["square",2,0.12]], atk:0.004, rel:0.3, vol:0.085, sus:0.15, dur:0.6, lp:2600 },
+  clav:       { parts:[["sawtooth",1,0.7],["square",2,0.15]], atk:0.003, rel:0.18, vol:0.07, sus:0.05, dur:0.35, lp:3000, lpEnv:0.3 },
+  harpsi:     { parts:[["sawtooth",1,0.5],["sawtooth",2,0.25]], atk:0.002, rel:0.25, vol:0.055, sus:0, dur:0.4, strum:0.01 },
+  organ:      { parts:[["sine",1,1],["sine",2,0.5],["sine",3,0.3],["sine",4,0.15]], atk:0.006, rel:0.06, vol:0.06, sus:0.9, pad:true },
+  churchorgan:{ parts:[["sine",1,1],["sine",2,0.6],["sine",4,0.4],["sine",8,0.2]], atk:0.02, rel:0.12, vol:0.05, sus:0.9, pad:true },
+  accordion:  { parts:[["sawtooth",1,0.5],["sawtooth",1,0.5,8],["square",2,0.1]], atk:0.03, rel:0.1, vol:0.055, sus:0.85, pad:true, lp:3000, vib:true },
+  nylon:      { parts:[["triangle",1,1],["sine",2,0.2]], atk:0.004, rel:0.35, vol:0.08, sus:0, dur:0.5, strum:0.012 },
+  eguitar:    { parts:[["sawtooth",1,0.6],["square",3,0.1]], atk:0.004, rel:0.3, vol:0.07, sus:0.1, dur:0.5, lp:2800, strum:0.01 },
+  muteguitar: { parts:[["triangle",1,1]], atk:0.003, rel:0.12, vol:0.08, sus:0, dur:0.16, strum:0.006, lp:2000 },
+  harp:       { parts:[["sine",1,1],["sine",2,0.3]], atk:0.003, rel:0.5, vol:0.07, sus:0, dur:0.7, strum:0.03 },
+  warmpad:    { parts:[["sawtooth",1,0.4,-6],["sawtooth",1,0.4,6],["sine",2,0.2]], atk:0.12, rel:0.35, vol:0.05, sus:0.8, pad:true, lp:2200, vib:true },
+  glasspad:   { parts:[["sine",1,1],["sine",3,0.2],["triangle",2,0.15]], atk:0.08, rel:0.35, vol:0.06, sus:0.75, pad:true },
+  strings:    { parts:[["sawtooth",1,0.5,-5],["sawtooth",1,0.5,5]], atk:0.1, rel:0.3, vol:0.05, sus:0.85, pad:true, lp:2400, vib:true },
+  brass:      { parts:[["sawtooth",1,0.7],["square",1,0.1]], atk:0.035, rel:0.15, vol:0.055, sus:0.7, pad:true, lp:2800 },
+  synthbrass: { parts:[["sawtooth",1,0.6,-6],["sawtooth",1,0.5,6]], atk:0.02, rel:0.12, vol:0.055, sus:0.7, pad:true, lp:3000, lpEnv:1.4 },
+  sawpoly:    { parts:[["sawtooth",1,0.5],["sawtooth",2,0.12]], atk:0.006, rel:0.12, vol:0.05, sus:0.6, pad:true, lp:3200 },
+  squarepoly: { parts:[["square",1,0.5],["square",2,0.1]], atk:0.006, rel:0.1, vol:0.05, sus:0.55, pad:true, lp:2600 },
+  pwm:        { parts:[["square",1,0.4,-8],["square",1,0.4,8]], atk:0.02, rel:0.14, vol:0.05, sus:0.65, pad:true, lp:2600, vib:true },
+  vibes:      { parts:[["sine",1,1],["sine",4,0.2]], atk:0.004, rel:0.6, vol:0.08, sus:0.2, dur:0.7, vib:true },
+  marimba:    { parts:[["sine",1,1],["sine",4,0.25],["sine",9,0.05]], atk:0.002, rel:0.3, vol:0.09, sus:0, dur:0.35 },
+  musicbox:   { parts:[["sine",1,1],["sine",4,0.35],["sine",8,0.08]], atk:0.002, rel:0.45, vol:0.07, sus:0, dur:0.5 },
+  bell:       { parts:[["sine",1,1],["sine",2.76,0.5],["sine",5.4,0.2]], atk:0.002, rel:0.6, vol:0.06, sus:0, dur:0.7 },
+};
+// Bass instruments (the "Bass" menu) — a root-note line under the chords.
+const BASS_SPECS = {
+  bass:     { parts:[["sawtooth",1,0.8]], atk:0.006, rel:0.1, vol:0.17, sus:0.2, dur:0.3, lp:520, lpEnv:0.8 },
+  pick:     { parts:[["sawtooth",1,0.8],["square",2,0.1]], atk:0.003, rel:0.12, vol:0.16, sus:0.15, dur:0.3, lp:900, lpEnv:0.6 },
+  fretless: { parts:[["sine",1,1],["triangle",2,0.2]], atk:0.02, rel:0.2, vol:0.17, sus:0.3, dur:0.5, lp:700, vib:true },
+  dbass:    { parts:[["triangle",1,1]], atk:0.015, rel:0.18, vol:0.18, sus:0.1, dur:0.5 },
+  synbass:  { parts:[["sawtooth",1,0.85]], atk:0.004, rel:0.1, vol:0.14, sus:0.4, dur:0.35, lp:1200, lpEnv:0.5 },
+  sub:      { parts:[["sine",1,1]], atk:0.01, rel:0.12, vol:0.2, sus:0.5, dur:0.4 },
+  acid:     { parts:[["sawtooth",1,0.9]], atk:0.003, rel:0.12, vol:0.13, sus:0.2, dur:0.3, lp:1400, lpEnv:0.35, q:6 },
+  square:   { parts:[["square",1,0.75]], atk:0.004, rel:0.1, vol:0.13, sus:0.3, dur:0.3, lp:1000 },
+};
+function voiceChord(ctx, t, chord, sym, V, slotDur) {
+  const iv = chordIvs(chord.quality), rootMid = 48 + chord.root;
+  const notes = sym === "U" ? iv.slice(1).map(x => rootMid + x) : [rootMid - 12, ...iv.map(x => rootMid + x)];
+  const g = sym === ">" ? 1.25 : sym === "U" ? 0.6 : 1;
+  const vol = V.vol * g / Math.sqrt(notes.length);
+  const dur = V.pad ? Math.max(0.14, slotDur * 0.95) : (V.dur || 0.4);
+  notes.forEach((mid, j) => synthVoice(ctx, t + j * (V.strum || 0), mid, vol, V, dur));
+}
+function voiceBass(ctx, t, chord, sym, V) {
+  const mid = 36 + chord.root + (sym === "U" ? 7 : 0);
+  synthVoice(ctx, t, mid, V.vol * (sym === ">" ? 1.15 : 1), V, V.dur);
+}
+function playHit(ctx, t, chord, sym, instr, slotDur) {
+  if (instr === "guitar") return strumChord(ctx, t, chord, sym);
+  if (CHORD_SPECS[instr]) return voiceChord(ctx, t, chord, sym, CHORD_SPECS[instr], slotDur);
+  if (BASS_SPECS[instr]) return voiceBass(ctx, t, chord, sym, BASS_SPECS[instr]); // legacy sketches
+  return strumChord(ctx, t, chord, sym);
+}
+// screen-efficient grouped menus (optgroups) for the instrument dropdowns
+const CHORD_MENU = [
+  ["Keys & piano", [["piano","Grand piano"],["ep","Electric piano"],["wurli","Wurlitzer"],["clav","Clavinet"],["harpsi","Harpsichord"]]],
+  ["Organs & reeds", [["organ","Drawbar organ"],["churchorgan","Church organ"],["accordion","Accordion"]]],
+  ["Guitars & harp", [["guitar","Acoustic guitar"],["nylon","Nylon guitar"],["eguitar","Electric guitar"],["muteguitar","Muted guitar"],["harp","Harp"]]],
+  ["Pads & synths", [["warmpad","Warm pad"],["glasspad","Glass pad"],["strings","String ensemble"],["brass","Brass section"],["synthbrass","Synth brass"],["sawpoly","Saw poly"],["squarepoly","Square poly"],["pwm","PWM synth"]]],
+  ["Mallets & bells", [["vibes","Vibraphone"],["marimba","Marimba"],["musicbox","Music box"],["bell","Celesta"]]],
+];
+const BASS_MENU = [
+  ["Electric", [["bass","Finger bass"],["pick","Picked bass"],["fretless","Fretless bass"]]],
+  ["Acoustic", [["dbass","Upright bass"]]],
+  ["Synth", [["synbass","Synth bass"],["sub","Sub bass"],["acid","Acid 303"],["square","Square bass"]]],
+];
 
 // Melody lead voices — chosen from the "Lead" dropdown. Each spec is a stack of
 // partials (oscillator type · harmonic multiple · relative level) plus an
 // envelope: atk = attack, rel = release tail, vol = peak, sus = sustain level
 // (0 = percussive decay, >0 = held tone). lp adds a low-pass; vib adds vibrato.
-const LEAD_VOICES = [
-  ["synth","Synth lead"], ["sine","Soft sine"], ["triangle","Mellow triangle"],
-  ["square","Chiptune square"], ["saw","Bright saw"], ["flute","Flute"],
-  ["pluck","Pluck"], ["bell","Bell"], ["musicbox","Music box"],
-  ["ep","Electric piano"], ["strings","Strings"], ["brass","Brass"],
-  ["organ","Organ"], ["voice","Voice (ah)"], ["glass","Glass pad"], ["whistle","Whistle"],
+const LEAD_MENU = [
+  ["Synth", [["synth","Synth lead"],["sine","Soft sine"],["triangle","Mellow triangle"],["square","Chiptune square"],["saw","Bright saw"],["pad","Soft pad"],["glass","Glass pad"]]],
+  ["Wind", [["flute","Flute"],["whistle","Whistle"],["ocarina","Ocarina"],["sax","Saxophone"],["clarinet","Clarinet"],["harmonica","Harmonica"]]],
+  ["Plucked & mallet", [["pluck","Pluck"],["banjo","Banjo"],["kalimba","Kalimba"],["steeldrum","Steel drum"],["bell","Bell"],["musicbox","Music box"]]],
+  ["Keys & ensemble", [["ep","Electric piano"],["organ","Organ"],["strings","Strings"],["brass","Brass"],["accordionlead","Accordion"],["voice","Voice (ah)"],["choir","Choir"]]],
 ];
 const LEAD_SPECS = {
   synth:    { parts:[["triangle",1,1],["sine",2,0.3]],                 atk:0.012, rel:0.13, vol:0.12, sus:0.6 },
@@ -454,47 +520,23 @@ const LEAD_SPECS = {
   voice:    { parts:[["sawtooth",1,0.4],["sine",1,0.45]],             atk:0.06,  rel:0.18, vol:0.1,  sus:0.8, lp:1500, vib:true },
   glass:    { parts:[["sine",1,1],["sine",3,0.2],["triangle",2,0.15]],atk:0.07,  rel:0.32, vol:0.1,  sus:0.75 },
   whistle:  { parts:[["sine",1,1],["sine",2,0.02]],                   atk:0.03,  rel:0.1,  vol:0.12, sus:0.85, vib:true },
+  pad:      { parts:[["sawtooth",1,0.4,-6],["sawtooth",1,0.4,6]],     atk:0.12,  rel:0.3,  vol:0.09, sus:0.85, lp:2200, vib:true },
+  choir:    { parts:[["sawtooth",1,0.35],["sine",1,0.4],["sine",2,0.1]], atk:0.07, rel:0.2, vol:0.1, sus:0.8, lp:1800, vib:true },
+  sax:      { parts:[["sawtooth",1,0.6],["square",1,0.15]],           atk:0.02,  rel:0.12, vol:0.1,  sus:0.75, lp:2600, vib:true },
+  harmonica:{ parts:[["square",1,0.4],["sawtooth",1,0.2]],            atk:0.03,  rel:0.1,  vol:0.1,  sus:0.8, lp:2400, vib:true },
+  clarinet: { parts:[["square",1,0.5],["sine",3,0.1]],                atk:0.03,  rel:0.12, vol:0.11, sus:0.8, lp:2000, vib:true },
+  ocarina:  { parts:[["sine",1,1],["sine",2,0.03]],                   atk:0.02,  rel:0.1,  vol:0.12, sus:0.85, vib:true },
+  kalimba:  { parts:[["sine",1,1],["sine",3,0.2]],                    atk:0.003, rel:0.35, vol:0.12, sus:0 },
+  steeldrum:{ parts:[["sine",1,1],["sine",2,0.4],["sine",3,0.15]],    atk:0.004, rel:0.3,  vol:0.1,  sus:0 },
+  banjo:    { parts:[["triangle",1,1],["square",2,0.15]],             atk:0.002, rel:0.2,  vol:0.12, sus:0 },
+  accordionlead:{ parts:[["sawtooth",1,0.5],["sawtooth",1,0.4,10]],   atk:0.03,  rel:0.1,  vol:0.1,  sus:0.85, lp:3000, vib:true },
 };
 // legato=true softens the attack and lets the note ring past its slot so a
 // moving line flows together instead of re-articulating on every eighth.
 function leadNote(ctx, t, midi, dur, kind = "synth", legato = false) {
-  const V = LEAD_SPECS[kind] || LEAD_SPECS.synth;
-  const hz = midiHz(midi);
-  const atk = legato ? Math.max(V.atk, 0.03) : V.atk;
-  const rel = legato ? V.rel * 1.6 : V.rel;
-  const peak = V.vol, sus = peak * V.sus;
-  const t1 = t + atk;                          // reach peak
-  const t2 = Math.max(t1 + 0.01, t + dur);     // sustain end / release start
-  const t3 = t2 + rel;                         // silence
-  const g = ctx.createGain();
-  g.gain.setValueAtTime(0.0001, t);
-  g.gain.linearRampToValueAtTime(peak, t1);
-  if (V.sus > 0) {
-    g.gain.exponentialRampToValueAtTime(Math.max(0.0002, sus), Math.min(t2, t1 + 0.12));
-    g.gain.setValueAtTime(Math.max(0.0002, sus), t2);
-  }
-  g.gain.exponentialRampToValueAtTime(0.0006, t3);
-  g.connect(ctx.destination);
-  let out = g;
-  if (V.lp) {
-    const f = ctx.createBiquadFilter();
-    f.type = "lowpass"; f.frequency.value = V.lp; f.Q.value = 0.7;
-    f.connect(g); out = f;
-  }
-  let lfoG = null;
-  if (V.vib) {
-    const lfo = ctx.createOscillator(); lfoG = ctx.createGain();
-    lfo.type = "sine"; lfo.frequency.value = 5.2; lfoG.gain.value = hz * 0.006;
-    lfo.connect(lfoG); lfo.start(t + atk); lfo.stop(t3 + 0.05);
-  }
-  V.parts.forEach(([type, mult, amp]) => {
-    const o = ctx.createOscillator();
-    o.type = type; o.frequency.value = hz * mult;
-    if (lfoG) lfoG.connect(o.frequency);
-    const pg = ctx.createGain(); pg.gain.value = amp;
-    o.connect(pg).connect(out);
-    o.start(t); o.stop(t3 + 0.05);
-  });
+  const base = LEAD_SPECS[kind] || LEAD_SPECS.synth;
+  const V = legato ? { ...base, atk: Math.max(base.atk, 0.03), rel: base.rel * 1.6 } : base;
+  synthVoice(ctx, t, midi, V.vol, V, dur);
 }
 
 /* ===== fingering diagrams ===== */
@@ -683,6 +725,7 @@ export default function ProgressionWheel() {
   const [curLabel, setCurLabel] = useState(null);
   const [bpmSt, setBpmSt] = useState({ key:"", val:0 });
   const [instr, setInstr] = useState("guitar");
+  const [bassInstr, setBassInstr] = useState("none");       // separate bass part (root line)
   const [melInstr, setMelInstr] = useState("synth");        // melody lead voice
   const [legato, setLegato] = useState(true);               // merge/flow melody notes
   const [patSel, setPatSel] = useState({ key:"", id:"" });
@@ -700,7 +743,7 @@ export default function ProgressionWheel() {
   const [curInst, setCurInst] = useState(null);             // instance key currently playing
   const metroRef = useRef(null);
   const bpmRef = useRef(0), patRef = useRef([]), swingRef = useRef(false);
-  const chordsRef = useRef({ list:[], seq:[] }), instrRef = useRef("guitar"), drumRef = useRef(null);
+  const chordsRef = useRef({ list:[], seq:[] }), instrRef = useRef("guitar"), drumRef = useRef(null), bassRef = useRef("none");
   const meloRef = useRef(null);
 
   // Emotion leads the ranking so changing it always changes the chords
@@ -925,7 +968,7 @@ export default function ProgressionWheel() {
   const rhythm = PATTERNS[patId];
   const effBpm = bpmSt.key === progId ? bpmSt.val : (BPM_DEFAULT[progId] || 96);
   bpmRef.current = effBpm; patRef.current = rhythm.pattern; swingRef.current = !!rhythm.swing;
-  instrRef.current = instr; drumRef.current = DRUMS[drum].pattern;
+  instrRef.current = instr; drumRef.current = DRUMS[drum].pattern; bassRef.current = bassInstr;
   const meloBeats = rhythm.pattern.length;                  // eighths per bar (6 in waltz time)
   // key-independent chord identity, per pool: base slot / contrast slot / numeral position / insert tag
   const chordId = (c, i) => c.inserted ? c.baseName
@@ -1017,6 +1060,9 @@ export default function ProgressionWheel() {
         }
         const dpat = drumRef.current;
         if (dpat && dpat[i]) for (const ch of dpat[i]) drumSound(m.ctx, t, ch, m.noise);
+        // separate bass part: root on each quarter-note beat, independent of rests
+        if (chord && i % 2 === 0 && bassRef.current !== "none" && BASS_SPECS[bassRef.current])
+          voiceBass(m.ctx, t, chord, i === 0 ? ">" : "b", BASS_SPECS[bassRef.current]);
         const mel = meloRef.current;
         if (mel) {
           let sym = null, mb = 0;
@@ -1121,7 +1167,7 @@ export default function ProgressionWheel() {
   useEffect(() => { loadSketches(); }, []);   // eslint-disable-line
   const saveSketch = async () => {
     const name = sketchName.trim() || keyLabel + " · " + prog.label;
-    const s = { name, progId, tonic, genre, emotion, colour, patId, drum, instr,
+    const s = { name, progId, tonic, genre, emotion, colour, patId, drum, instr, bassInstr, melInstr, legato,
       bpm: effBpm, selStruct, contrast, edits: ovMap, inserts: insList };
     const list = [...(sketches || []).filter(x => x.name !== name), s];
     setSketches(list); setSketchName("");
@@ -1133,7 +1179,13 @@ export default function ProgressionWheel() {
   };
   const loadSketch = s => {
     setForce(s.progId); setTonic(s.tonic); setGenre(s.genre); setEmotion(s.emotion);
-    setColour(s.colour || "triads"); setInstr(s.instr); setDrum(s.drum);
+    setColour(s.colour || "triads"); setDrum(s.drum);
+    // legacy sketches stored a bass as the chord instrument; move it to the bass part
+    const legacyBass = s.instr === "bass" || s.instr === "dbass";
+    setInstr(legacyBass ? "guitar" : (s.instr || "guitar"));
+    setBassInstr(legacyBass ? s.instr : (s.bassInstr || "none"));
+    if (s.melInstr) setMelInstr(s.melInstr);
+    if (s.legato != null) setLegato(s.legato);
     setPatSel({ key:s.progId, id:s.patId }); setBpmSt({ key:s.progId, val:s.bpm });
     setSelStruct(s.selStruct || ""); setContrast(s.contrast || { id:"", sec:"C" });
     const eKey = s.progId + ":" + s.tonic;
@@ -1503,8 +1555,8 @@ export default function ProgressionWheel() {
             </div>
           </div>
 
-          <div className="selrow" style={{ marginTop:10 }}>
-            <label className="selwrap">
+          <div className="selrow" style={{ marginTop:10, flexWrap:"wrap" }}>
+            <label className="selwrap" style={{ flex:"1 1 118px" }}>
               <span className="lbl" style={{ margin:0 }}>Pattern</span>
               <select value={patId} onChange={e => setPatSel({ key: progId, id: e.target.value })}>
                 {Object.entries(PATTERNS).map(([id, p]) => (
@@ -1514,23 +1566,38 @@ export default function ProgressionWheel() {
                 ))}
               </select>
             </label>
-            <label className="selwrap">
-              <span className="lbl" style={{ margin:0 }}>Sound</span>
+            <label className="selwrap" style={{ flex:"1 1 118px" }}>
+              <span className="lbl" style={{ margin:0 }}>Chords</span>
               <select value={instr} onChange={e => setInstr(e.target.value)}>
-                <option value="guitar">Guitar</option>
-                <option value="piano">Piano</option>
-                <option value="organ">Organ</option>
-                <option value="bass">Bass</option>
-                <option value="dbass">Double bass</option>
+                {CHORD_MENU.map(([g, items]) => (
+                  <optgroup key={g} label={g}>
+                    {items.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+                  </optgroup>
+                ))}
               </select>
             </label>
-            <label className="selwrap">
+            <label className="selwrap" style={{ flex:"1 1 118px" }}>
+              <span className="lbl" style={{ margin:0 }}>Bass</span>
+              <select value={bassInstr} onChange={e => setBassInstr(e.target.value)}>
+                <option value="none">No bass</option>
+                {BASS_MENU.map(([g, items]) => (
+                  <optgroup key={g} label={g}>
+                    {items.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+                  </optgroup>
+                ))}
+              </select>
+            </label>
+            <label className="selwrap" style={{ flex:"1 1 118px" }}>
               <span className="lbl" style={{ margin:0 }}>Lead</span>
               <select value={melInstr} onChange={e => setMelInstr(e.target.value)}>
-                {LEAD_VOICES.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+                {LEAD_MENU.map(([g, items]) => (
+                  <optgroup key={g} label={g}>
+                    {items.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+                  </optgroup>
+                ))}
               </select>
             </label>
-            <label className="selwrap">
+            <label className="selwrap" style={{ flex:"1 1 118px" }}>
               <span className="lbl" style={{ margin:0 }}>Drums</span>
               <select value={drum} onChange={e => setDrum(e.target.value)}>
                 {Object.entries(DRUMS).map(([id, d]) => <option key={id} value={id}>{d.name}</option>)}
