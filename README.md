@@ -23,7 +23,8 @@ songs, colour moves, song structures, a playable rhythm section and a melody gri
   the entire chosen structure
 - **Melody grid** — eighth-note, polyphonic, spanning the whole progression, with per-chord landing
   notes and a scale/pentatonic reference; melodies persist through every edit and transpose with the
-  key
+  key. A **Suggest** tab writes 16 common melody shapes (chord-tone arpeggios, scale runs, call &
+  response, AA / AB / AABA motifs, sequences and more) onto the grid from a chosen starting note
 - **Tools** — destination finder (shortest chord path between two chords), descending-bass
   harmonisations, ear training, dice, MIDI export, persistent sketches
 - **Fingerings** — tap any chord for guitar chord boxes (open + barre shapes) and highlighted piano

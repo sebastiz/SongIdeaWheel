@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.10
+- Suggested melodies: every melody grid now has a **Write / Suggest** tab pair. The Suggest tab
+  offers 16 common melody shapes — chord-tone arpeggios (up / down / rolling) that follow the bar's
+  chord, scale runs, waves, neighbour tones, pedal tones, call & response, question & answer, AA / AB
+  / AABA motif forms, ascending / descending sequences and leaping figures. Pick a pattern and a
+  starting scale note and "Write to grid" lays it straight onto the section's melody, ready to edit;
+  "Clear melody" wipes the section.
+
 ## 3.9
 - Live section highlight: the currently playing pass lights up in the song list (accent border,
   play marker), and the playback readout names it (V2 verse - bar 3 of 40).
