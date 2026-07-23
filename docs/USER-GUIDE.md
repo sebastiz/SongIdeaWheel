@@ -54,11 +54,17 @@ No sound on iPhone? Check the ring/silent switch — it mutes all web audio.
 - **The scale** for the current key, pentatonic notes filled — safe over every diatonic bar.
 - **Landing notes per chord** — each chord's strongest melody targets (root / 3rd / 5th / 7th…).
   Notes outside the key show gold ("chromatic"): strong landings during that chord's bar only.
-- **Sketch a melody** — an eighth-note, polyphonic grid across the whole loop, one column per
-  eighth, grouped by bar under each chord's header. Tap cells; stack cells in a column for
+- **Sketch a melody** (**Write** tab) — an eighth-note, polyphonic grid across the whole loop, one
+  column per eighth, grouped by bar under each chord's header. Tap cells; stack cells in a column for
   harmonies. Melodies are stored as scale degrees, so they transpose with the key, and they are
   anchored to chords, so inserting/removing/swapping chords never wipes them. Changing to a
   different progression carries the melody over positionally.
+- **Suggested melodies** (**Suggest** tab) — pick a common melody shape and a starting scale note,
+  then **Write to grid** lays it onto the section so you can hear it and edit from there; **Clear
+  melody** empties the section. The 16 shapes cover chord-tone arpeggios (up / down / rolling, which
+  follow each bar's chord), scale runs, waves, neighbour tones, a repeated pedal tone, call &
+  response, question & answer (resolving to the tonic), the AA / AB / AABA motif forms, ascending and
+  descending sequences, and wide leaping figures.
 
 ## Song & melody
 

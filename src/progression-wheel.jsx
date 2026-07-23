@@ -580,6 +580,112 @@ const BORROWED = {
 const MEDIANTS = { major: [["III",4,"maj",1],["VI",9,"maj",1],["bVI",8,"maj",1],["bIII",3,"maj",1]],
   minor: [["V of bIII",10,"maj",1]] };
 
+/* ===== suggested melody patterns =====
+   Each generator returns an array of `nBars` bars; every bar is an array of
+   length B (the eighth-note columns), and every cell is an array of scale-degree
+   indices (0..6, an index into the diatonic scale). Melodies are written in
+   diatonic scale degrees relative to a chosen starting degree, then wrapped back
+   into the single-octave grid the writer displays. The context `u` carries:
+     u.nBars   — bars in this section
+     u.B       — eighth columns per bar (8 in common time, 6 in 3/4 & 6/8)
+     u.start   — the chosen starting scale degree (0..6)
+     u.chordDegs — per-bar diatonic degree of the bar's chord root (null if the
+                   chord is chromatic / outside the key) — used by the arpeggios */
+const wrap7 = d => ((d % 7) + 7) % 7;
+// the "strong" beat columns of a bar (every other eighth): [0,2,4,6] in 4/4
+const qbeats = B => Array.from({ length: Math.ceil(B / 2) }, (_, i) => i * 2).filter(x => x < B);
+const blankBars = (nBars, B) => Array.from({ length: nBars }, () => Array.from({ length: B }, () => []));
+// lay a sequence of degrees onto given columns of one bar
+const layBar = (B, cols, degs) => {
+  const bar = Array.from({ length: B }, () => []);
+  cols.forEach((c, i) => { if (i < degs.length && degs[i] != null && c < B) bar[c] = [wrap7(degs[i])]; });
+  return bar;
+};
+const MELODY_PATTERNS = [
+  { id:"arpUp", name:"Arpeggio ↑ (chord tones)",
+    desc:"Climbs each bar's chord — root, 3rd, 5th, 7th — one note per beat. Follows the chords; the start note fills in over any out-of-key chord.",
+    gen(u){ const Q = qbeats(u.B);
+      return Array.from({ length:u.nBars }, (_, b) => {
+        const g = u.chordDegs[b] == null ? u.start : u.chordDegs[b];
+        return layBar(u.B, Q, [g, g+2, g+4, g+6]); }); } },
+  { id:"arpDown", name:"Arpeggio ↓ (chord tones)",
+    desc:"Falls through each bar's chord from the top down — 5th, 3rd, root. A gentler, more resolved shape than climbing.",
+    gen(u){ const Q = qbeats(u.B);
+      return Array.from({ length:u.nBars }, (_, b) => {
+        const g = u.chordDegs[b] == null ? u.start : u.chordDegs[b];
+        return layBar(u.B, Q, [g+4, g+2, g, g-3]); }); } },
+  { id:"arpRoll", name:"Arpeggio ↑↓ (rolling)",
+    desc:"Rolls up the chord and back down within every bar — a continuous broken-chord ripple.",
+    gen(u){ return Array.from({ length:u.nBars }, (_, b) => {
+        const g = u.chordDegs[b] == null ? u.start : u.chordDegs[b];
+        const shape = [0,2,4,6,4,2,0,2].map(x => g + x);
+        return layBar(u.B, Array.from({ length:u.B }, (_, i) => i), shape.slice(0, u.B)); }); } },
+  { id:"scaleUp", name:"Scale run ↑",
+    desc:"A stepwise climb up the scale from your start note, running straight through the whole section.",
+    gen(u){ const Q = qbeats(u.B); let n = 0;
+      return Array.from({ length:u.nBars }, () =>
+        layBar(u.B, Q, Q.map(() => u.start + n++))); } },
+  { id:"scaleDown", name:"Scale run ↓",
+    desc:"A stepwise descent from your start note down the scale, running through the whole section.",
+    gen(u){ const Q = qbeats(u.B); let n = 0;
+      return Array.from({ length:u.nBars }, () =>
+        layBar(u.B, Q, Q.map(() => u.start - n++))); } },
+  { id:"wave", name:"Wave (up-and-down contour)",
+    desc:"A smooth arch that rises a few steps then falls back, over and over — an easy, singable contour.",
+    gen(u){ const Q = qbeats(u.B); const tri = [0,1,2,3,2,1]; let n = 0;
+      return Array.from({ length:u.nBars }, () =>
+        layBar(u.B, Q, Q.map(() => u.start + tri[n++ % tri.length]))); } },
+  { id:"neighbor", name:"Neighbour tones",
+    desc:"Decorates your start note with its upper and lower neighbours — note, step up, note, step down.",
+    gen(u){ const Q = qbeats(u.B); const fig = [0,1,0,-1]; let n = 0;
+      return Array.from({ length:u.nBars }, () =>
+        layBar(u.B, Q, Q.map(() => u.start + fig[n++ % fig.length]))); } },
+  { id:"pedal", name:"Pedal tone (repeated note)",
+    desc:"Repeats your start note on every beat — a drone / chant to build tension against the moving chords.",
+    gen(u){ const Q = qbeats(u.B);
+      return Array.from({ length:u.nBars }, () => layBar(u.B, Q, Q.map(() => u.start))); } },
+  { id:"callResp", name:"Call & response",
+    desc:"A rising question in one bar answered by a falling reply in the next — the two-bar conversation that anchors most tunes.",
+    gen(u){ const Q = qbeats(u.B);
+      return Array.from({ length:u.nBars }, (_, b) =>
+        b % 2 === 0 ? layBar(u.B, Q, [0,1,2,3].map(x => u.start + x))
+                    : layBar(u.B, Q, [2,1,0,0].map(x => u.start + x))); } },
+  { id:"aa", name:"AA — repeat the motif",
+    desc:"States one short motif and repeats it in every bar. The most direct way to make a line stick.",
+    gen(u){ const Q = qbeats(u.B); const A = [0,2,1,0];
+      return Array.from({ length:u.nBars }, () => layBar(u.B, Q, A.map(x => u.start + x))); } },
+  { id:"ab", name:"AB — alternating motifs",
+    desc:"Alternates a low motif (A) with a higher contrasting one (B), bar by bar — statement and counter-statement.",
+    gen(u){ const Q = qbeats(u.B); const A = [0,2,1,0], B = [4,2,3,4];
+      return Array.from({ length:u.nBars }, (_, b) =>
+        layBar(u.B, Q, (b % 2 === 0 ? A : B).map(x => u.start + x))); } },
+  { id:"aaba", name:"AABA — motif with a middle turn",
+    desc:"Motif A three times with a contrasting B in the third bar — the classic 32-bar sentence in miniature.",
+    gen(u){ const Q = qbeats(u.B); const A = [0,2,1,0], B = [4,3,2,4];
+      return Array.from({ length:u.nBars }, (_, b) =>
+        layBar(u.B, Q, (b % 4 === 2 ? B : A).map(x => u.start + x))); } },
+  { id:"seqUp", name:"Ascending sequence",
+    desc:"Takes one three-note figure and steps it up the scale a degree at a time each bar — builds lift and momentum.",
+    gen(u){ const Q = qbeats(u.B); const fig = [0,1,2];
+      return Array.from({ length:u.nBars }, (_, b) =>
+        layBar(u.B, Q, fig.map(x => u.start + x + b))); } },
+  { id:"seqDown", name:"Descending sequence",
+    desc:"A three-note figure stepped down the scale each bar — an easing, settling motion toward resolution.",
+    gen(u){ const Q = qbeats(u.B); const fig = [0,-1,-2];
+      return Array.from({ length:u.nBars }, (_, b) =>
+        layBar(u.B, Q, fig.map(x => u.start + x - b))); } },
+  { id:"leaps", name:"Leaping (zig-zag)",
+    desc:"Zig-zags between your start note and a note a fifth above — wide, angular intervals for a bolder hook.",
+    gen(u){ const Q = qbeats(u.B); const fig = [0,4,0,4];
+      return Array.from({ length:u.nBars }, () => layBar(u.B, Q, fig.map(x => u.start + x))); } },
+  { id:"qa", name:"Question & answer (resolves to tonic)",
+    desc:"An antecedent phrase that rises and hangs, then a consequent that comes to rest on the tonic — a fully closed two-bar sentence.",
+    gen(u){ const Q = qbeats(u.B);
+      return Array.from({ length:u.nBars }, (_, b) =>
+        b % 2 === 0 ? layBar(u.B, Q, [u.start, u.start+1, u.start+2, u.start+2])
+                    : layBar(u.B, Q, [u.start+1, u.start-1, u.start, 0])); } },
+];
+
 /* ===== app ===== */
 export default function ProgressionWheel() {
   const [tonic, setTonic] = useState(0);
@@ -611,6 +717,8 @@ export default function ProgressionWheel() {
   const [contrast, setContrast] = useState({ id:"", sec:"C" }); // second loop for a section
   const [melos, setMelos] = useState({ progId:"", secs:{} }); // per-section melodies, chord-anchored
   const [openSecs, setOpenSecs] = useState({});             // which section melody grids are open
+  const [melTab, setMelTab] = useState({});                 // per-section: "write" | "suggest"
+  const [sugSel, setSugSel] = useState({});                 // per-section: { pat, start } suggested-melody picks
   const [showLand, setShowLand] = useState(false);          // landing-notes collapse
   const [curQ, setCurQ] = useState(null);                   // {sym, col} playhead in melody grids
   const [curInst, setCurInst] = useState(null);             // instance key currently playing
@@ -884,6 +992,20 @@ export default function ProgressionWheel() {
     const at = cell.indexOf(deg);
     if (at >= 0) cell.splice(at, 1); else cell.push(deg);
     setMelos({ progId, secs: { ...(melos.progId === progId ? melos.secs : {}), [sym]: { ids: sec.ids, bars } } });
+  };
+  // write a suggested melody pattern onto a section's grid (overwrites what's there)
+  const applyPattern = (d, sec, patId, start) => {
+    const pat = MELODY_PATTERNS.find(p => p.id === patId) || MELODY_PATTERNS[0];
+    const chordDegs = d.cs.map(c => {
+      const i = scaleNotes.indexOf(((c.root % 12) + 12) % 12);
+      return i >= 0 ? i : null;
+    });
+    const bars = pat.gen({ nBars: d.cs.length, B: meloBeats, start: start % scaleSemis.length, chordDegs });
+    setMelos({ progId, secs: { ...(melos.progId === progId ? melos.secs : {}), [d.key]: { ids: sec.ids, bars } } });
+    setMelTab({ ...melTab, [d.key]: "write" });   // reveal the result on the grid
+  };
+  const clearMelody = (d, sec) => {
+    setMelos({ progId, secs: { ...(melos.progId === progId ? melos.secs : {}), [d.key]: { ids: sec.ids, bars: blankBars(d.cs.length, meloBeats) } } });
   };
   {
     const idx = chords.map((_, i) => i);
@@ -1164,6 +1286,7 @@ export default function ProgressionWheel() {
         .mcell.b0 { border-left:2px solid #3A4656; }
         .mcell.bt { border-left:1px solid #2A3442; }
         .mscroll { overflow-x:auto; padding-bottom:4px; }
+        .sugmel { background:#10151D; border:1px solid #2A3442; border-radius:12px; padding:10px 12px; margin-bottom:10px; }
         .sgrp { border:1.5px solid #2A3442; border-radius:13px; padding:2px 11px 9px; margin-top:11px; }
         .sgrp .arr:first-of-type { border-top:none; padding-top:2px; }
         .arr.playnow { background:#161F2C; border-radius:10px; padding:9px 10px 10px; border-top-color:transparent; margin-top:6px; }
@@ -1571,28 +1694,71 @@ export default function ProgressionWheel() {
                 </div>
                 <div className="arrch">{d.str}</div>
                 {d.note && <div className="arrnote">{d.note}</div>}
-                {open && (
-                  <div className="mscroll" style={{ marginTop:8 }}>
-                    <div className="mline" style={{ gridTemplateColumns:`36px repeat(${cols}, minmax(15px,1fr))` }}>
-                      <span />
-                      {d.cs.map((c, b) => (
-                        <span key={b} className="mbar" style={{ gridColumn:`span ${meloBeats}`,
-                          background: FN_COLOR[c.func || "T"], color: FN_TEXT[c.func || "T"] }}>{c.name}</span>
-                      ))}
+                {open && (() => {
+                  const tab = melTab[d.key] || "write";
+                  const pick = sugSel[d.key] || { pat: MELODY_PATTERNS[0].id, start: 0 };
+                  const curPat = MELODY_PATTERNS.find(p => p.id === pick.pat) || MELODY_PATTERNS[0];
+                  return (
+                  <div style={{ marginTop:8 }}>
+                    <div className="seg" style={{ marginBottom:8 }}>
+                      <button className={tab === "write" ? "on" : ""}
+                        onClick={() => setMelTab({ ...melTab, [d.key]: "write" })}>✎ Write</button>
+                      <button className={tab === "suggest" ? "on" : ""}
+                        onClick={() => setMelTab({ ...melTab, [d.key]: "suggest" })}>✨ Suggest</button>
                     </div>
-                    {[...scaleSemis.keys()].reverse().map(deg => (
-                      <div key={deg} className="mline" style={{ gridTemplateColumns:`36px repeat(${cols}, minmax(15px,1fr))` }}>
-                        <span className="mnote">{SEMI_NAME[(tonic + scaleSemis[deg]) % 12]}</span>
-                        {Array.from({ length: cols }, (_, c) => (
-                          <div key={c} onClick={() => tapMelo(d.key, c, deg)}
-                            className={"mcell" + ((sec.flat[c] || []).includes(deg) ? " on" : "")
-                              + (playing && curQ && curQ.sym === d.key && curQ.col === c ? " colnow" : "")
-                              + (c % meloBeats === 0 && c > 0 ? " b0" : c % 2 === 0 && c > 0 ? " bt" : "")} />
+
+                    {tab === "suggest" && (
+                      <div className="sugmel">
+                        <div className="selrow" style={{ flexWrap:"wrap", gap:8 }}>
+                          <div className="selwrap" style={{ minWidth:170 }}>
+                            <span className="keytag">Melody pattern</span>
+                            <select value={pick.pat}
+                              onChange={e => setSugSel({ ...sugSel, [d.key]: { ...pick, pat:e.target.value } })}>
+                              {MELODY_PATTERNS.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                            </select>
+                          </div>
+                          <div className="selwrap" style={{ minWidth:120, flex:"0 0 auto" }}>
+                            <span className="keytag">Start note</span>
+                            <select value={pick.start}
+                              onChange={e => setSugSel({ ...sugSel, [d.key]: { ...pick, start:+e.target.value } })}>
+                              {scaleSemis.map((s, i) => (
+                                <option key={i} value={i}>{SEMI_NAME[(tonic + s) % 12]} · degree {i + 1}</option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+                        <p className="arrnote" style={{ marginTop:7 }}>{curPat.desc}</p>
+                        <div className="row" style={{ gap:6, marginTop:8 }}>
+                          <button className="btn" onClick={() => applyPattern(d, sec, pick.pat, pick.start)}>
+                            Write to grid</button>
+                          <button className="mini" onClick={() => clearMelody(d, sec)}>Clear melody</button>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="mscroll">
+                      <div className="mline" style={{ gridTemplateColumns:`36px repeat(${cols}, minmax(15px,1fr))` }}>
+                        <span />
+                        {d.cs.map((c, b) => (
+                          <span key={b} className="mbar" style={{ gridColumn:`span ${meloBeats}`,
+                            background: FN_COLOR[c.func || "T"], color: FN_TEXT[c.func || "T"] }}>{c.name}</span>
                         ))}
                       </div>
-                    ))}
+                      {[...scaleSemis.keys()].reverse().map(deg => (
+                        <div key={deg} className="mline" style={{ gridTemplateColumns:`36px repeat(${cols}, minmax(15px,1fr))` }}>
+                          <span className="mnote">{SEMI_NAME[(tonic + scaleSemis[deg]) % 12]}</span>
+                          {Array.from({ length: cols }, (_, c) => (
+                            <div key={c} onClick={() => tapMelo(d.key, c, deg)}
+                              className={"mcell" + ((sec.flat[c] || []).includes(deg) ? " on" : "")
+                                + (playing && curQ && curQ.sym === d.key && curQ.col === c ? " colnow" : "")
+                                + (c % meloBeats === 0 && c > 0 ? " b0" : c % 2 === 0 && c > 0 ? " bt" : "")} />
+                          ))}
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                )}
+                  );
+                })()}
               </div>
             );
           })}
