@@ -37,6 +37,24 @@ path with the loop order numbered above each chord.
 - **Reset** appears in the hint line whenever the progression has been edited.
 - **The pill strip** below shows the loop; tap a pill for guitar and piano fingerings (open shapes
   where they exist, barre shapes elsewhere; 9th chords show the 7th shape plus which note to add).
+- **Reorder a group** — tap **⇄ Reorder** to switch the strip into selection mode. Tap several
+  chords to select them, then **◀ Move / Move ▶** shifts the whole selection one step at a time (a
+  non-adjacent selection collapses into a block at its destination). **↺ Straighten** restores the
+  original order. The new order drives playback, the melody and the stave, and saves with the sketch.
+
+## On the stave
+
+Turns the song into readable music. **Show score**, then choose **Piano** or **Guitar**.
+
+- **Piano** draws a grand staff: the melody in the right hand (treble), the chord voicing held as a
+  whole note in the left hand (bass), and the chord symbol above each bar. With no melody written
+  yet, the right hand shows the chord voicing too.
+- **Guitar** draws a treble lead sheet — chord symbols above, the melody on the staff (notated as it
+  is written; guitar sounds an octave lower), and fret numbers on a six-line **tab** staff beneath.
+  With no melody, the bars show the chord voicings as a chord chart (use the fingering card for
+  playable shapes).
+- The score follows the selected **song structure** if one is chosen, otherwise the loop, and it
+  redraws live as you edit chords, reorder them, change key or sketch a melody.
 
 ## Rhythm
 

@@ -1,5 +1,16 @@
 # Changelog
 
+## 3.11
+- **Group reorder**: the chord strip has a **⇄ Reorder** mode. Tap several chords to select them,
+  then **◀ Move / Move ▶** shifts the whole selection as a block; **↺ Straighten** restores the
+  original order. The new order flows through everything downstream — playback, melody and the
+  stave. Reorderings save with the sketch.
+- **On the stave**: a new notation panel writes the song out as real music. **Piano** draws a grand
+  staff — the melody in the right hand, the chord voicing held in the left, chord symbols above each
+  bar. **Guitar** draws a treble lead sheet with the melody (sounding an octave lower) and fret
+  numbers on a tab staff below; with no melody it shows the chord voicings as a chord chart. Follows
+  the selected song structure, or the loop.
+
 ## 3.10
 - Suggested melodies: every melody grid now has a **Write / Suggest** tab pair. The Suggest tab
   offers 16 common melody shapes — chord-tone arpeggios (up / down / rolling) that follow the bar's
