@@ -499,6 +499,167 @@ function PianoDiagram({ root, quality }) {
   );
 }
 
+// stable identity of a chord in the loop, for the reorder permutation
+const chordKeyOf = c => c.inserted ? c.baseName : "b" + c.bi;
+
+/* ===== staff notation ===== */
+// pitch-class → [letter index (C=0..B=6), accidental] following SEMI_NAME's flat spelling
+const SPELL = [[0,0],[1,-1],[1,0],[2,-1],[2,0],[3,0],[3,1],[4,0],[5,-1],[5,0],[6,-1],[6,0]];
+const LETTER = ["C","D","E","F","G","A","B"];
+// diatonic staff step of a MIDI note (C4=60 → 28); one step = one line-or-space
+const stepOfMidi = m => (Math.floor(m / 12) - 1) * 7 + SPELL[((m % 12) + 12) % 12][0];
+const accOfMidi = m => SPELL[((m % 12) + 12) % 12][1];
+const noteName = m => LETTER[SPELL[((m % 12) + 12) % 12][0]] + ["𝄫","♭","","♯","𝄪"][accOfMidi(m) + 2];
+const GUITAR_OPEN = [64, 59, 55, 50, 45, 40];   // strings 1(high E)..6(low E), MIDI of open
+// pick a comfortable string/fret for a melody note: lowest fret in [0..14], preferring higher strings
+function tabFret(mid) {
+  let best = null;
+  GUITAR_OPEN.forEach((open, s) => {
+    const fret = mid - open;
+    if (fret >= 0 && fret <= 14 && (!best || fret < best.fret)) best = { str: s, fret };
+  });
+  return best;
+}
+
+// One measure worth of notation. `mel` = [{on, dur, mids:[...]}] (onset eighth, duration in eighths).
+function NotationScore({ measures, instr, meloBeats, perSystem = 4 }) {
+  const INK = "#EDE7DA", FAINT = "#3A4453", SYM = "#EAE2CC";
+  const LG = 9;                                   // staff line gap
+  const staffH = 4 * LG;
+  const clefW = 34, barW = 150, padL = 8, padTop = 26;
+  const sysW = clefW + perSystem * barW + padL;
+  const piano = instr === "piano";
+  // vertical layout within a system
+  const trebleTop = padTop;
+  const trebleMid = trebleTop + 2 * LG;                       // B4 line, step 34
+  const lowerTop = trebleTop + staffH + (piano ? 3 * LG : 4 * LG);
+  const bassMid = lowerTop + 2 * LG;                          // D3 line, step 22 (piano)
+  const tabGap = 8, tabH = 5 * tabGap;                         // guitar TAB: 6 lines
+  const sysH = lowerTop + (piano ? staffH : tabH) + 24;
+  const yTreble = step => trebleMid - (step - 34) * (LG / 2);
+  const yBass = step => bassMid - (step - 22) * (LG / 2);
+  const tabY = str => lowerTop + str * tabGap;                // guitar string line (0=high E)
+
+  const nSys = Math.ceil(measures.length / perSystem) || 1;
+  const totalH = nSys * sysH + 10;
+
+  // draw a single notehead (+ stem/flag/accidental/ledgers) on a clef, return svg nodes
+  let uid = 0;
+  const drawNotes = (mids, x, dur, clef) => {
+    const nodes = [];
+    const yFn = clef === "bass" ? yBass : yTreble;
+    const topLine = clef === "bass" ? 26 : 38, botLine = clef === "bass" ? 18 : 30;
+    const open = dur >= 4;                                     // half/whole = hollow head
+    const filled = !open;
+    const rx = LG * 0.62, ry = LG * 0.52;
+    const steps = mids.map(stepOfMidi);
+    const midStep = clef === "bass" ? 22 : 34;
+    const avg = steps.reduce((a, b) => a + b, 0) / steps.length;
+    const stemUp = avg <= midStep;                            // low notes → stem up
+    let minY = Infinity, maxY = -Infinity;
+    mids.forEach(m => {
+      const s = stepOfMidi(m), cy = yFn(s), acc = accOfMidi(m);
+      minY = Math.min(minY, cy); maxY = Math.max(maxY, cy);
+      // ledger lines
+      for (let k = topLine + 2; k <= s; k += 2) nodes.push(<line key={"lg"+uid++} x1={x - 9} y1={yFn(k)} x2={x + 9} y2={yFn(k)} stroke={INK} strokeWidth="1" />);
+      for (let k = botLine - 2; k >= s; k -= 2) nodes.push(<line key={"lg"+uid++} x1={x - 9} y1={yFn(k)} x2={x + 9} y2={yFn(k)} stroke={INK} strokeWidth="1" />);
+      nodes.push(<ellipse key={"nh"+uid++} cx={x} cy={cy} rx={rx} ry={ry} transform={`rotate(-18 ${x} ${cy})`}
+        fill={filled ? INK : "none"} stroke={INK} strokeWidth={open ? 1.5 : 0} />);
+      if (dur >= 8) nodes.push(<ellipse key={"nw"+uid++} cx={x} cy={cy} rx={rx * 0.5} ry={ry * 0.85} fill="#171E28" />);
+      if (acc) nodes.push(<text key={"ac"+uid++} x={x - rx - 4} y={cy + 4} textAnchor="end" fill={INK} fontSize="14" fontFamily="serif">{acc < 0 ? "♭" : "♯"}</text>);
+    });
+    // stem (skip for whole notes)
+    if (dur < 8) {
+      const sx = stemUp ? x + rx - 0.5 : x - rx + 0.5;
+      const y1 = stemUp ? minY : maxY, y2 = stemUp ? maxY - 3.3 * LG : minY + 3.3 * LG;
+      nodes.push(<line key={"st"+uid++} x1={sx} y1={y1} x2={sx} y2={y2} stroke={INK} strokeWidth="1.4" />);
+      if (dur < 2) nodes.push(<path key={"fl"+uid++} d={stemUp
+        ? `M ${sx} ${y2} q 8 3 6 12` : `M ${sx} ${y2} q 8 -3 6 -12`} fill="none" stroke={INK} strokeWidth="1.6" />);
+    }
+    return nodes;
+  };
+
+  const systems = [];
+  for (let sy = 0; sy < nSys; sy++) {
+    const y0 = sy * sysH;
+    const bars = measures.slice(sy * perSystem, sy * perSystem + perSystem);
+    const parts = [];
+    const staffLines = (yFn, lineSteps) => lineSteps.map(s =>
+      <line key={"sl"+s} x1={padL} y1={yFn(s)} x2={sysW} y2={yFn(s)} stroke={FAINT} strokeWidth="1" />);
+    // staff lines
+    parts.push(...staffLines(yTreble, [30, 32, 34, 36, 38]));
+    if (piano) parts.push(...staffLines(yBass, [18, 20, 22, 24, 26]));
+    else for (let i = 0; i < 6; i++) parts.push(<line key={"tl"+i} x1={padL} y1={tabY(i)} x2={sysW} y2={tabY(i)} stroke={FAINT} strokeWidth="1" />);
+    // clefs
+    parts.push(<text key="tc" x={padL + 4} y={yTreble(31)} fill={INK} fontSize="40" fontFamily="serif">𝄞</text>);
+    if (piano) parts.push(<text key="bc" x={padL + 4} y={yBass(24)} fill={INK} fontSize="34" fontFamily="serif">𝄢</text>);
+    else parts.push(<text key="tab" x={padL + 6} y={lowerTop + tabH * 0.62} fill={INK} fontSize={tabH * 0.5} fontWeight="700" fontFamily="Archivo" style={{ letterSpacing: "-2px" }}>TAB</text>);
+    // time signature on the first system
+    if (sy === 0) {
+      const num = meloBeats % 2 === 0 ? meloBeats / 2 : meloBeats, den = meloBeats % 2 === 0 ? 4 : 8;
+      parts.push(<text key="tsn" x={clefW + 2} y={yTreble(36)} textAnchor="middle" fill={INK} fontSize="15" fontWeight="700" fontFamily="serif">{num}</text>);
+      parts.push(<text key="tsd" x={clefW + 2} y={yTreble(31)} textAnchor="middle" fill={INK} fontSize="15" fontWeight="700" fontFamily="serif">{den}</text>);
+    }
+    // barlines + measures
+    const topY = yTreble(38), botY = piano ? yBass(18) : tabY(5);
+    parts.push(<line key="bl0" x1={clefW} y1={topY} x2={clefW} y2={botY} stroke={FAINT} strokeWidth="1" />);
+    bars.forEach((m, bi) => {
+      const mx0 = clefW + bi * barW;
+      const mx1 = mx0 + barW;
+      const inner = mx0 + 24;                                   // where notes start
+      const span = barW - 40;
+      const bl = <line key={"bl"+bi} x1={mx1} y1={topY} x2={mx1} y2={botY} stroke={FAINT} strokeWidth="1" />;
+      // chord symbol
+      parts.push(<text key={"cs"+bi} x={mx0 + 6} y={trebleTop - 8} fill={SYM} fontSize="14" fontWeight="700" fontFamily="Archivo">{m.name}{m.word ? <tspan fill="#8B94A3" fontSize="10" fontWeight="600"> {m.word}</tspan> : null}</text>);
+      // melody / chord notes
+      const hasMel = m.mel && m.mel.length;
+      if (piano) {
+        // LH: chord voicing as a whole note stack on the bass staff
+        const lh = [36 + m.chord.root, ...chordIvs(m.chord.quality).slice(1, 3).map(iv => 48 + m.chord.root + iv)];
+        parts.push(...drawNotes(lh.filter(n => n <= 59), inner, 8, "bass"));
+        if (hasMel) m.mel.forEach(ev => {
+          const x = inner + (ev.on / meloBeats) * span;
+          parts.push(...drawNotes(ev.mids, x, ev.dur, "treble"));
+        });
+        else parts.push(...drawNotes(chordIvs(m.chord.quality).map(iv => 60 + m.chord.root + iv).filter(n => n <= 84), inner, 8, "treble"));
+      } else {
+        const tab = (t, x) => parts.push(
+          <g key={"tf"+uid++}>
+            <rect x={x - 6} y={tabY(t.str) - 6} width={12} height={12} fill="#171E28" />
+            <text x={x} y={tabY(t.str) + 4} textAnchor="middle" fill={GOLD} fontSize="11" fontWeight="700" fontFamily="Archivo">{t.fret}</text>
+          </g>);
+        if (hasMel) m.mel.forEach(ev => {
+          const x = inner + (ev.on / meloBeats) * span;
+          parts.push(...drawNotes(ev.mids, x, ev.dur, "treble"));
+          const usedStr = new Set();                              // one fret per string within an onset
+          ev.mids.forEach(mid => {
+            let pick = tabFret(mid);
+            if (pick && usedStr.has(pick.str)) {
+              pick = null;
+              GUITAR_OPEN.forEach((open, s) => { const f = mid - open;
+                if (!usedStr.has(s) && f >= 0 && f <= 14 && (!pick || f < pick.fret)) pick = { str: s, fret: f }; });
+            }
+            if (pick) { usedStr.add(pick.str); tab(pick, x); }
+          });
+        });
+        else {
+          // no melody — show the chord voicing as a whole-note stack on the staff
+          // (tab is reserved for the single-line melody; use the fingering card for chord shapes)
+          const voic = chordIvs(m.chord.quality).map(iv => 60 + m.chord.root + iv).filter(n => n <= 79);
+          parts.push(...drawNotes(voic, inner, 8, "treble"));
+        }
+      }
+      parts.push(bl);
+    });
+    systems.push(<g key={"sys"+sy} transform={`translate(0 ${y0})`}>{parts}</g>);
+  }
+  return (
+    <svg width={sysW} viewBox={`0 0 ${sysW} ${totalH}`} style={{ width: "100%", maxWidth: sysW }}>
+      {systems}
+    </svg>
+  );
+}
+
 /* ===== wheel geometry + palette ===== */
 const CX = 320, CY = 320, R_MAJ = 240, R_MIN = 163;
 const slotXY = (pos, r) => { const a = ((pos * 30 - 90) * Math.PI) / 180; return { x: CX + r * Math.cos(a), y: CY + r * Math.sin(a) }; };
@@ -722,6 +883,11 @@ export default function ProgressionWheel() {
   const [showLand, setShowLand] = useState(false);          // landing-notes collapse
   const [curQ, setCurQ] = useState(null);                   // {sym, col} playhead in melody grids
   const [curInst, setCurInst] = useState(null);             // instance key currently playing
+  const [order, setOrder] = useState({ key:"", list:null }); // reordered chord sequence (keys)
+  const [reorder, setReorder] = useState(false);            // pill reorder mode on/off
+  const [pillSel, setPillSel] = useState([]);               // selected pill indices (reorder mode)
+  const [scoreInstr, setScoreInstr] = useState("piano");    // notation: piano | guitar
+  const [showScore, setShowScore] = useState(false);        // notation panel collapse
   const metroRef = useRef(null);
   const bpmRef = useRef(0), patRef = useRef([]), swingRef = useRef(false);
   const chordsRef = useRef({ list:[], seq:[] }), instrRef = useRef("guitar"), drumRef = useRef(null);
@@ -785,8 +951,15 @@ export default function ProgressionWheel() {
       });
       out.push(c);
     });
+    // user reordering: apply a saved permutation when its key set still matches
+    const ord = order.key === editKey ? order.list : null;
+    if (ord && ord.length === out.length) {
+      const byKey = new Map(out.map(c => [chordKeyOf(c), c]));
+      if (ord.every(k => byKey.has(k)) && new Set(ord).size === ord.length)
+        return ord.map(k => byKey.get(k));
+    }
     return out;
-  }, [progId, tonic, edits, inserts, colour]);
+  }, [progId, tonic, edits, inserts, colour, order]);
 
   const baseNames = useMemo(() => prog.numerals.map(n => {
     const [off, q] = numDefs[n];
@@ -815,7 +988,24 @@ export default function ProgressionWheel() {
     const before = baseNames.indexOf(s.target.baseName);
     if (before >= 0) applyInsert(before, s.root, "dom", "V/" + String(s.target.numeral).replace(/7$/, ""));
   };
-  const resetEdits = () => { setEdits({ key:"", map:{} }); setInserts({ key:"", list:[] }); setSel(null); };
+  const resetEdits = () => { setEdits({ key:"", map:{} }); setInserts({ key:"", list:[] }); setSel(null);
+    setOrder({ key:"", list:null }); setPillSel([]); };
+
+  /* ---- pill reorder: select several chords and move them as a group ---- */
+  const togglePillSel = i => setPillSel(s => s.includes(i) ? s.filter(x => x !== i) : [...s, i].sort((a, b) => a - b));
+  const movePills = dir => {
+    if (!pillSel.length) return;
+    const sel = new Set(pillSel), minSel = Math.min(...pillSel);
+    const moving = chords.filter((_, i) => sel.has(i));
+    const rest = chords.filter((_, i) => !sel.has(i));
+    const nBefore = chords.filter((_, i) => !sel.has(i) && i < minSel).length;
+    const insertAt = dir < 0 ? Math.max(0, nBefore - 1) : Math.min(rest.length, nBefore + 1);
+    const next = [...rest.slice(0, insertAt), ...moving, ...rest.slice(insertAt)];
+    setOrder({ key: editKey, list: next.map(chordKeyOf) });
+    setPillSel(moving.map((_, k) => insertAt + k));
+  };
+  const straightenPills = () => { setOrder({ key:"", list:null }); setPillSel([]); };
+  const toggleReorder = () => { setReorder(v => !v); setPillSel([]); setFingerIdx(null); };
 
   const uniques = useMemo(() => {
     const seen = {};
@@ -979,6 +1169,29 @@ export default function ProgressionWheel() {
     });
     return out;
   }, [melos, progId, sections, meloBeats]);
+  // measures for the staff notation: chord + melody events per bar, mirroring the MIDI flatten
+  const scoreMeasures = useMemo(() => {
+    const bars = (structBars && structBars.length) ? structBars : chords.map(c => ({ chord: c }));
+    const melBase = (tonic > 6 ? 60 : 72) + tonic;
+    const loopSec = secMelos.L1 || Object.values(secMelos)[0];
+    return bars.map((b, bi) => {
+      const secm = b.inst != null ? secMelos[b.inst] : loopSec;
+      const barCols = secm && secm.bars[b.inst != null ? b.mb : bi % (secm.bars.length || 1)];
+      const at = (i, deg) => (barCols && barCols[i] || []).includes(deg);
+      const mel = [];
+      for (let i = 0; i < meloBeats; i++) {
+        const degs = (barCols && barCols[i]) || [];
+        const fresh = degs.filter(d => !(i > 0 && at(i - 1, d)));
+        if (!fresh.length) continue;
+        let run = 1;
+        while (i + run < meloBeats && fresh.every(d => at(i + run, d))) run++;
+        mel.push({ on: i, dur: run, mids: fresh.slice().sort((a, c) => a - c).map(d => melBase + scaleSemis[d]) });
+      }
+      return { chord: b.chord, name: b.chord.name, word: b.inst != null ? (b.mb === 0 ? b.word : null) : null, mel };
+    });
+  }, [structBars, chords, secMelos, tonic, meloBeats, scaleSemis]);
+  const scoreHasMelody = scoreMeasures.some(m => m.mel.length);
+
   const copyMelody = (fromKey, toKey) => {
     const from = melos.progId === progId ? melos.secs[fromKey] : null;
     if (!from) return;
@@ -1160,7 +1373,8 @@ export default function ProgressionWheel() {
   const saveSketch = async () => {
     const name = sketchName.trim() || keyLabel + " · " + prog.label;
     const s = { name, progId, tonic, genre, emotion, colour, patId, drum, instr,
-      bpm: effBpm, selStruct, contrast, edits: ovMap, inserts: insList };
+      bpm: effBpm, selStruct, contrast, edits: ovMap, inserts: insList,
+      order: order.key === editKey ? order.list : null };
     const list = [...(sketches || []).filter(x => x.name !== name), s];
     setSketches(list); setSketchName("");
     try {
@@ -1176,6 +1390,7 @@ export default function ProgressionWheel() {
     setSelStruct(s.selStruct || ""); setContrast(s.contrast || { id:"", sec:"C" });
     const eKey = s.progId + ":" + s.tonic;
     setEdits({ key:eKey, map:s.edits || {} }); setInserts({ key:eKey, list:s.inserts || [] });
+    setOrder(s.order ? { key:eKey, list:s.order } : { key:"", list:null }); setPillSel([]);
     setIoNote("Loaded “" + s.name + "”.");
   };
 
@@ -1240,6 +1455,14 @@ export default function ProgressionWheel() {
         .pill { border-radius:8px; padding:3px 9px; font-size:13.5px; font-weight:700; line-height:1.3; cursor:pointer; }
         .pill.pillon { outline:2px dashed #FFFFFF; outline-offset:2px; }
         .pill.pillplay { outline:2px solid ${GOLD}; outline-offset:2px; }
+        .pill.pillsel { outline:2px solid #6EA8FF; outline-offset:2px; box-shadow:0 0 0 4px rgba(110,168,255,.18); }
+        .mini.miniOn { border-color:#6EA8FF; color:#BcD6FF; }
+        .mini:disabled { opacity:.4; cursor:default; }
+        .reorderbar { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:2px 10px 6px; }
+        .reorderbar .rlbl { font-size:12.5px; color:#8B94A3; margin-right:2px; }
+        .scorewrap { overflow-x:auto; background:#0C1119; border:1px solid #232C3A; border-radius:12px; padding:12px 8px; margin:4px 10px 6px; }
+        .scorewrap svg { display:block; }
+        .scoreempty { font-size:12.5px; color:#8B94A3; padding:8px 10px; }
         .pill i { font-style:normal; font-weight:600; font-size:10px; opacity:.65; margin-right:4px; }
         .fingcard { margin:10px 10px 4px; padding:10px 12px; background:#10151D; border:1px solid #2A3442; border-radius:12px; }
         .fingtitle { font-family:'Fraunces',serif; font-weight:650; font-size:18px; color:#EAE2CC; margin-bottom:2px; }
@@ -1494,14 +1717,29 @@ export default function ProgressionWheel() {
           <div className="stripline">
             <span className="strippills">
               {chords.map((c, i) => (
-                <span key={i} className={"pill" + (fingerIdx === i ? " pillon" : "") + (playing && curBar === i ? " pillplay" : "")}
+                <span key={i} className={"pill" + (!reorder && fingerIdx === i ? " pillon" : "")
+                    + (reorder && pillSel.includes(i) ? " pillsel" : "") + (playing && curBar === i ? " pillplay" : "")}
                   style={{ background: FN_COLOR[c.func], color: FN_TEXT[c.func] }}
-                  onClick={() => setFingerIdx(fingerIdx === i ? null : i)}>
+                  onClick={() => reorder ? togglePillSel(i) : setFingerIdx(fingerIdx === i ? null : i)}>
                   <i>{c.numeral}</i>{c.name}
                 </span>
               ))}
             </span>
+            <button className={"mini" + (reorder ? " miniOn" : "")} style={{ marginLeft:"auto" }}
+              onClick={toggleReorder} title="Select several chords and shift them as a group">
+              {reorder ? "✕ Done" : "⇄ Reorder"}
+            </button>
           </div>
+
+          {reorder && (
+            <div className="reorderbar">
+              <span className="rlbl">{pillSel.length ? `${pillSel.length} selected` : "Tap chords to select"}</span>
+              <button className="mini" disabled={!pillSel.length} onClick={() => movePills(-1)}>◀ Move</button>
+              <button className="mini" disabled={!pillSel.length} onClick={() => movePills(1)}>Move ▶</button>
+              {order.list && order.key === editKey &&
+                <button className="mini" onClick={straightenPills} title="Restore the original order">↺ Straighten</button>}
+            </div>
+          )}
 
           {fingerIdx != null && chords[fingerIdx] && (
             <div className="fingcard">
@@ -1521,6 +1759,35 @@ export default function ProgressionWheel() {
             {showSec && <span style={{ color:GOLD }}><i className="dash" /> secondary dominant</span>}
             <span>numbers = order in the loop</span>
           </div>
+        </div>
+
+        {/* notation — the song on a stave */}
+        <div className="panel">
+          <div className="row" style={{ justifyContent:"space-between", alignItems:"center" }}>
+            <div className="progtitle" style={{ fontSize:17 }}>On the stave</div>
+            <div className="row" style={{ gap:7, alignItems:"center" }}>
+              {showScore && (
+                <div className="seg">
+                  <button className={scoreInstr === "piano" ? "on" : ""} onClick={() => setScoreInstr("piano")}>Piano</button>
+                  <button className={scoreInstr === "guitar" ? "on" : ""} onClick={() => setScoreInstr("guitar")}>Guitar</button>
+                </div>
+              )}
+              <button className="btn" style={{ padding:"5px 13px" }} onClick={() => setShowScore(v => !v)}>
+                {showScore ? "Hide" : "Show score"}
+              </button>
+            </div>
+          </div>
+          {showScore && (<>
+            <div className="scorewrap">
+              <NotationScore measures={scoreMeasures} instr={scoreInstr} meloBeats={meloBeats} />
+            </div>
+            <div className="hint" style={{ padding:"2px 10px 4px" }}>
+              {scoreInstr === "piano"
+                ? <>Grand staff — right hand plays the melody{scoreHasMelody ? "" : " (add one in the melody grid below)"}, left hand holds the chord voicing. Chord symbols sit above each bar.</>
+                : <>Guitar lead sheet — chord symbols above, the melody on the treble staff (sounding an octave lower){scoreHasMelody ? ", with fret numbers on the tab below" : " — write a melody below and its tab appears here"}.</>}
+              {structSel ? " Following the selected song structure." : " Following the loop."}
+            </div>
+          </>)}
         </div>
 
         {/* rhythm */}

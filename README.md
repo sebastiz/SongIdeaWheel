@@ -11,7 +11,10 @@ songs, colour moves, song structures, a playable rhythm section and a melody gri
 
 - **The wheel** — progressions drawn on the circle of fifths, colour-coded tonic / subdominant /
   dominant, animated path, tap-to-swap chords, tappable overlays for parallel chords and secondary
-  dominants
+  dominants. The chord strip has a **reorder** mode: multi-select chords and shift them as a group
+- **On the stave** — the whole song written as notation. **Piano** draws a grand staff (melody in
+  the right hand, chord voicing in the left); **Guitar** draws a treble lead sheet with the melody
+  and a fret-numbered tab staff. Follows the chosen song structure or the loop, and redraws live
 - **Chord colour** — Triads / 7ths / 9ths switch re-voices the whole app by rule
 - **Colour moves** — secondary dominants, parallel swaps, borrowed chords, chromatic mediants and
   tritone substitutions, each with reference songs that use the move

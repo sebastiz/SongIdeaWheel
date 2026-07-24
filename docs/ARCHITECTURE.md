@@ -25,7 +25,12 @@ Everything flows from one `useMemo` producing `chords`, the live loop:
 4. **Colour transform** (`seventh(q, numeral)`): triads → 7ths → 9ths applied last, so stored edits
    stay colour-independent.
 
-Both edit stores are keyed by `progId:tonic` so they clear when they'd be meaningless.
+5. **Reorder** (`order.list`): a saved permutation of the final loop, stored as a list of stable
+   chord keys (`chordKeyOf` — `b<bi>` for base slots, the insert tag otherwise). Applied last, and
+   only when its key set still matches the current chords, so it survives inert edits and falls back
+   cleanly when the chord set changes.
+
+Both edit stores (and the reorder) are keyed by `progId:tonic` so they clear when they'd be meaningless.
 
 Derived from `chords`: `uniques` (deduped, with step numbers), `parallels` and `secondaries`
 (the suggestion/overlay sets), `appliedMoves` (human-readable edit list with reference songs), the
@@ -64,6 +69,16 @@ are re-mapped onto the current chord sequence — id-matched within the same pro
 follow their chords through inserts/removals/swaps/key changes), positionally on a different
 progression. Degrees, not pitches, are stored, so melodies transpose with the key and survive mode
 changes.
+
+## Notation
+
+`NotationScore` draws the song on a staff in hand-built SVG (no engraving library), matching the
+app's other hand-drawn diagrams. Pitches are placed by diatonic *step* (`stepOfMidi`, one step per
+line-or-space, flat-spelled via `SPELL`), so ledger lines, accidentals and clef anchoring are simple
+arithmetic. `scoreMeasures` reuses the MIDI flatten to pair each bar's chord with its melody events
+(onset eighth + run length). Piano renders a grand staff (RH melody / LH chord voicing); guitar
+renders a treble lead sheet plus a six-line tab staff, mapping each melody note to the lowest
+comfortable fret (`tabFret`, distinct string per onset).
 
 ## MIDI
 
