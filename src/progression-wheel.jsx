@@ -888,6 +888,11 @@ export default function ProgressionWheel() {
   const [pillSel, setPillSel] = useState([]);               // selected pill indices (reorder mode)
   const [scoreInstr, setScoreInstr] = useState("piano");    // notation: piano | guitar
   const [showScore, setShowScore] = useState(false);        // notation panel collapse
+  const [melMove, setMelMove] = useState(false);            // melody grid: draw vs move mode
+  const [melSel, setMelSel] = useState({ key:"", notes:{} }); // selected melody notes ("c:deg" → true)
+  const [melBox, setMelBox] = useState(null);               // live marquee box while selecting
+  const [melGhost, setMelGhost] = useState(null);           // live {key,dc,dd} while dragging a group
+  const melDragRef = useRef(null);
   const metroRef = useRef(null);
   const bpmRef = useRef(0), patRef = useRef([]), swingRef = useRef(false);
   const chordsRef = useRef({ list:[], seq:[] }), instrRef = useRef("guitar"), drumRef = useRef(null);
@@ -1206,6 +1211,87 @@ export default function ProgressionWheel() {
     if (at >= 0) cell.splice(at, 1); else cell.push(deg);
     setMelos({ progId, secs: { ...(melos.progId === progId ? melos.secs : {}), [sym]: { ids: sec.ids, bars } } });
   };
+
+  /* ---- melody grid: select several notes and drag them as a group ---- */
+  const nKey = (c, deg) => c + ":" + deg;
+  const noteOn = (sec, c, deg) => ((sec.flat[c] || []).includes(deg));
+  const selNotesList = () => Object.keys(melSel.notes).map(k => { const [c, deg] = k.split(":").map(Number); return { c, deg }; });
+  const setSelFrom = (key, list) => setMelSel({ key, notes: Object.fromEntries(list.map(n => [nKey(n.c, n.deg), true])) });
+  // shift the whole selection by dc columns / dd scale-degrees, clamped so it stays on the grid
+  const doMelMove = (key, base, dc, dd) => {
+    const sec = secMelos[key]; if (!sec) return;
+    const cols = sec.flat.length, maxDeg = scaleSemis.length - 1;
+    const notes = Object.keys(base).map(k => { const [c, deg] = k.split(":").map(Number); return { c, deg }; });
+    if (!notes.length) return;
+    const cs = notes.map(n => n.c), ds = notes.map(n => n.deg);
+    dc = Math.max(-Math.min(...cs), Math.min(dc, (cols - 1) - Math.max(...cs)));
+    dd = Math.max(-Math.min(...ds), Math.min(dd, maxDeg - Math.max(...ds)));
+    if (!dc && !dd) { setSelFrom(key, notes); return; }
+    const bars = sec.bars.map(bar => bar.map(a => [...a]));
+    const colOf = c => bars[Math.floor(c / meloBeats)][c % meloBeats];
+    notes.forEach(n => { const cell = colOf(n.c); const at = cell.indexOf(n.deg); if (at >= 0) cell.splice(at, 1); });
+    notes.forEach(n => { const cell = colOf(n.c + dc), nd = n.deg + dd; if (!cell.includes(nd)) cell.push(nd); });
+    setMelos({ progId, secs: { ...(melos.progId === progId ? melos.secs : {}), [key]: { ids: sec.ids, bars } } });
+    setSelFrom(key, notes.map(n => ({ c: n.c + dc, deg: n.deg + dd })));
+  };
+  const nudgeMel = (dc, dd) => { if (melSel.key && Object.keys(melSel.notes).length) doMelMove(melSel.key, melSel.notes, dc, dd); };
+  const deleteMelSel = () => {
+    const key = melSel.key, sec = secMelos[key];
+    const notes = selNotesList();
+    if (!sec || !notes.length) return;
+    const bars = sec.bars.map(bar => bar.map(a => [...a]));
+    notes.forEach(n => { const cell = bars[Math.floor(n.c / meloBeats)][n.c % meloBeats]; const at = cell.indexOf(n.deg); if (at >= 0) cell.splice(at, 1); });
+    setMelos({ progId, secs: { ...(melos.progId === progId ? melos.secs : {}), [key]: { ids: sec.ids, bars } } });
+    setMelSel({ key:"", notes:{} });
+  };
+  const cellFromPoint = (x, y) => {
+    const el = typeof document !== "undefined" && document.elementFromPoint(x, y);
+    if (!el || el.dataset == null || el.dataset.mk === undefined) return null;
+    return { key: el.dataset.mk, c: +el.dataset.c, deg: +el.dataset.deg };
+  };
+  const melDown = (e, key, c, deg, sec) => {
+    if (!melMove) return;                                   // draw mode → onClick handles taps
+    e.preventDefault();
+    const on = noteOn(sec, c, deg);
+    const already = melSel.key === key && melSel.notes[nKey(c, deg)];
+    let mode = "marquee", base = null;
+    if (on) {
+      if (!already) setSelFrom(key, [{ c, deg }]);
+      base = already ? { ...melSel.notes } : { [nKey(c, deg)]: true };
+      mode = "move";
+    }
+    melDragRef.current = { key, startC: c, startDeg: deg, curC: c, curDeg: deg, mode, base, moved: false };
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch (_) {}
+    if (mode === "marquee") setMelBox({ key, c0: c, c1: c, d0: deg, d1: deg });
+  };
+  const melDrag = e => {
+    const dr = melDragRef.current; if (!dr) return;
+    const cell = cellFromPoint(e.clientX, e.clientY);
+    if (!cell || cell.key !== dr.key || (cell.c === dr.curC && cell.deg === dr.curDeg)) return;
+    dr.curC = cell.c; dr.curDeg = cell.deg;
+    dr.moved = dr.moved || cell.c !== dr.startC || cell.deg !== dr.startDeg;
+    if (dr.mode === "marquee")
+      setMelBox({ key: dr.key, c0: Math.min(dr.startC, cell.c), c1: Math.max(dr.startC, cell.c),
+        d0: Math.min(dr.startDeg, cell.deg), d1: Math.max(dr.startDeg, cell.deg) });
+    else setMelGhost({ key: dr.key, dc: cell.c - dr.startC, dd: cell.deg - dr.startDeg });
+  };
+  const melUp = () => {
+    const dr = melDragRef.current; if (!dr) return;
+    melDragRef.current = null; setMelBox(null); setMelGhost(null);
+    if (dr.mode === "marquee") {
+      if (!dr.moved) { setMelSel({ key:"", notes:{} }); return; }   // tap on empty clears
+      const sec = secMelos[dr.key]; if (!sec) return;
+      const c0 = Math.min(dr.startC, dr.curC), c1 = Math.max(dr.startC, dr.curC);
+      const d0 = Math.min(dr.startDeg, dr.curDeg), d1 = Math.max(dr.startDeg, dr.curDeg);
+      const list = [];
+      for (let c = c0; c <= c1; c++) for (let deg = d0; deg <= d1; deg++) if (noteOn(sec, c, deg)) list.push({ c, deg });
+      setSelFrom(dr.key, list);
+    } else {
+      const dc = dr.curC - dr.startC, dd = dr.curDeg - dr.startDeg;
+      if (dc || dd) doMelMove(dr.key, dr.base, dc, dd);
+    }
+  };
+
   // write a suggested melody pattern onto a section's grid (overwrites what's there)
   const applyPattern = (d, sec, patId, start) => {
     const pat = MELODY_PATTERNS.find(p => p.id === patId) || MELODY_PATTERNS[0];
@@ -1508,6 +1594,12 @@ export default function ProgressionWheel() {
         .mcell.on.colnow { background:#EAE2CC; }
         .mcell.b0 { border-left:2px solid #3A4656; }
         .mcell.bt { border-left:1px solid #2A3442; }
+        .mcell.mv { touch-action:none; }
+        .mcell.msel { outline:2px solid #6EA8FF; outline-offset:-1px; box-shadow:inset 0 0 0 2px rgba(110,168,255,.35); }
+        .mcell.mbox { background:rgba(110,168,255,.22); border-color:#6EA8FF; }
+        .mcell.mghost { background:rgba(110,168,255,.5); border-color:#6EA8FF; }
+        .melmodebar { display:flex; flex-wrap:wrap; align-items:center; gap:7px; margin-bottom:8px; }
+        .melmodebar .rlbl { font-size:12.5px; color:#8B94A3; margin:0 2px; }
         .mscroll { overflow-x:auto; padding-bottom:4px; }
         .sugmel { background:#10151D; border:1px solid #2A3442; border-radius:12px; padding:10px 12px; margin-bottom:10px; }
         .sgrp { border:1.5px solid #2A3442; border-radius:13px; padding:2px 11px 9px; margin-top:11px; }
@@ -2003,7 +2095,27 @@ export default function ProgressionWheel() {
                       </div>
                     )}
 
-                    <div className="mscroll">
+                    {tab === "write" && (
+                      <div className="melmodebar">
+                        <div className="seg">
+                          <button className={!melMove ? "on" : ""} onClick={() => { setMelMove(false); setMelSel({ key:"", notes:{} }); }}>✎ Draw</button>
+                          <button className={melMove ? "on" : ""} onClick={() => setMelMove(true)}>✋ Move</button>
+                        </div>
+                        {melMove && (() => {
+                          const nSel = melSel.key === d.key ? Object.keys(melSel.notes).length : 0;
+                          return (<>
+                            <span className="rlbl">{nSel ? `${nSel} note${nSel > 1 ? "s" : ""}` : "drag a box, or a note"}</span>
+                            <button className="mini" disabled={!nSel} onClick={() => nudgeMel(0, 1)} title="Up a scale step">▲</button>
+                            <button className="mini" disabled={!nSel} onClick={() => nudgeMel(0, -1)} title="Down a scale step">▼</button>
+                            <button className="mini" disabled={!nSel} onClick={() => nudgeMel(-1, 0)} title="Earlier">◀</button>
+                            <button className="mini" disabled={!nSel} onClick={() => nudgeMel(1, 0)} title="Later">▶</button>
+                            <button className="mini" disabled={!nSel} onClick={deleteMelSel} title="Delete selected">🗑</button>
+                          </>);
+                        })()}
+                      </div>
+                    )}
+
+                    <div className="mscroll" onPointerMove={melDrag} onPointerUp={melUp} onPointerCancel={melUp}>
                       <div className="mline" style={{ gridTemplateColumns:`36px repeat(${cols}, minmax(15px,1fr))` }}>
                         <span />
                         {d.cs.map((c, b) => (
@@ -2014,12 +2126,22 @@ export default function ProgressionWheel() {
                       {[...scaleSemis.keys()].reverse().map(deg => (
                         <div key={deg} className="mline" style={{ gridTemplateColumns:`36px repeat(${cols}, minmax(15px,1fr))` }}>
                           <span className="mnote">{SEMI_NAME[(tonic + scaleSemis[deg]) % 12]}</span>
-                          {Array.from({ length: cols }, (_, c) => (
-                            <div key={c} onClick={() => tapMelo(d.key, c, deg)}
-                              className={"mcell" + ((sec.flat[c] || []).includes(deg) ? " on" : "")
+                          {Array.from({ length: cols }, (_, c) => {
+                            const on = (sec.flat[c] || []).includes(deg);
+                            const isSel = melMove && melSel.key === d.key && melSel.notes[nKey(c, deg)];
+                            const inBox = melBox && melBox.key === d.key && c >= melBox.c0 && c <= melBox.c1 && deg >= melBox.d0 && deg <= melBox.d1;
+                            const isGhost = melGhost && melGhost.key === d.key && melSel.key === d.key
+                              && melSel.notes[nKey(c - melGhost.dc, deg - melGhost.dd)];
+                            return (
+                            <div key={c} data-mk={d.key} data-c={c} data-deg={deg}
+                              onClick={() => { if (!melMove) tapMelo(d.key, c, deg); }}
+                              onPointerDown={e => melDown(e, d.key, c, deg, sec)}
+                              className={"mcell" + (on ? " on" : "") + (melMove ? " mv" : "")
+                                + (isSel ? " msel" : "") + (isGhost ? " mghost" : "") + (inBox ? " mbox" : "")
                                 + (playing && curQ && curQ.sym === d.key && curQ.col === c ? " colnow" : "")
                                 + (c % meloBeats === 0 && c > 0 ? " b0" : c % 2 === 0 && c > 0 ? " bt" : "")} />
-                          ))}
+                            );
+                          })}
                         </div>
                       ))}
                     </div>
